@@ -5,18 +5,35 @@ import random
 import logging
 import requests
 import asyncio
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta
 from collections import defaultdict
 from telegram import Update, ChatPermissions, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from pymongo import MongoClient
 
+# --- DUMMY SERVER FOR RENDER ---
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(b"Aegis Premium Bot is Alive!")
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), DummyHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_dummy_server, daemon=True).start()
+
 # --- Import Data ---
 try:
-    from chat_data import CHAT_DATA, TRUTHS, DARES, RIZZ, ROASTS, SHAYARI, TRACE_WORDS, BAN_GIFS, MUTE_GIFS
+    from chat_data import CHAT_DATA, TRUTHS, DARES, RIZZ, ROASTS, SHAYARI, TRACE_WORDS, DESI_GIFS, ROB_GIFS_SUCCESS, ROB_GIFS_FAIL, BAN_GIFS, MUTE_GIFS
 except ImportError:
-    CHAT_DATA, TRUTHS, DARES, RIZZ, ROASTS, SHAYARI, TRACE_WORDS = {"hello": ["Hi!"]}, ["Truth"], ["Dare"], ["Rizz"], ["Roast"], {}, []
-    BAN_GIFS, MUTE_GIFS = [], []
+    CHAT_DATA, TRUTHS, DARES, RIZZ, ROASTS, SHAYARI, TRACE_WORDS, DESI_GIFS = {}, [], [], [], [], {}, [], {}
+    ROB_GIFS_SUCCESS, ROB_GIFS_FAIL, BAN_GIFS, MUTE_GIFS = [], [], [], []
 
 # --- Logging Setup ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -39,7 +56,6 @@ afk_col = db['afk']
 chats_col = db['chats']
 gbans_col = db['gbans']
 users_col = db['users']
-chat_replies_col = db['chat_replies']
 
 # --- Game Memories ---
 ttt_games = {}
@@ -49,32 +65,32 @@ trace_games = {}
 LANGS = {
     "en": {
         "denied": "🚫 <b>Access Denied!</b> You Don't Have Enough Permissions.",
-        "owner_respect": "👑 <b>Hukum Sar Aankhon Par, Janab-e-Aala!</b>\n\n",
-        "owner_protection": "🛑 <b>Access Denied!</b>\n\nKisi Ki Aukaat Nahi Ki Mere Owner Ko Touch Kare! 😡",
-        "user_not_found": "❌ <b>Target Not Found!</b> Please Reply To Their Message.",
-        "banned": "🔨 <b>Banned!</b> {} Removed. 🚫",
-        "unbanned": "🕊️ {} Unbanned. ✅",
-        "kicked": "👢 <b>Kicked!</b> {} Removed. 🚪",
-        "muted": "🔇 <b>Muted!</b> {} Silenced. 🤐",
-        "unmuted": "🔊 <b>Unmuted!</b> {} Can Speak. 🗣️",
+        "owner_respect": "👑 <b>Yes, Boss!</b> Executing your command. ⚡\n\n",
+        "owner_protection": "🛑 <b>Access Denied!</b>\n\nNobody touches my Owner! 😡",
+        "user_not_found": "❌ <b>Target Not Found!</b> Reply to a user.",
+        "banned": "🔨 <b>BANNED!</b> {} has been removed. 🚫",
+        "unbanned": "🕊️ {} has been unbanned. ✅",
+        "kicked": "👢 <b>KICKED!</b> {} has been removed. 🚪",
+        "muted": "🔇 <b>MUTED!</b> {} has been silenced. 🤐",
+        "unmuted": "🔊 <b>UNMUTED!</b> {} can speak. 🗣️",
         "pinned": "📌 Message Pinned!",
         "unpinned": "📍 Message Unpinned!",
-        "admin_error": "⚠️ <b>Error:</b> Action Failed. User Is Admin Or I Lack Permissions.",
+        "admin_error": "⚠️ <b>Error:</b> Failed. Is the bot an Admin with rights?",
         "lang_changed": "🌐 Language Changed To English! 🇬🇧"
     },
     "hi": {
         "denied": "🚫 <b>Permission Nahi Hai!</b>",
-        "owner_respect": "👑 <b>Hukum Sar Aankhon Par, Janab-e-Aala!</b>\n\n",
-        "owner_protection": "🛑 <b>Access Denied!</b>\n\nKisi Ki Aukaat Nahi Ki Mere Owner Ko Touch Kare! 😡",
-        "user_not_found": "❌ <b>Target Nahi Mila!</b> Reply Karein.",
-        "banned": "🔨 <b>Banned!</b> {} Ko Ban Kar Diya. 🚫",
-        "unbanned": "🕊️ {} Ko Unban Kar Diya. ✅",
-        "kicked": "👢 <b>Kicked!</b> {} Ko Nikal Diya. 🚪",
-        "muted": "🔇 <b>Muted!</b> {} Ab Nahi Bol Sakta. 🤐",
-        "unmuted": "🔊 <b>Unmuted!</b> {} Ab Bol Sakta Hai. 🗣️",
+        "owner_respect": "👑 <b>Ji Huzoor!</b> Aapka hukum sar aankhon par. ⚡\n\n",
+        "owner_protection": "🛑 <b>Access Denied!</b>\n\nMere Owner ko touch karne ki aukaat kisi mein nahi! 😡",
+        "user_not_found": "❌ <b>Target Nahi Mila!</b> Kisi message ko reply karein.",
+        "banned": "🔨 <b>BANNED!</b> {} ko nikal diya gaya. 🚫",
+        "unbanned": "🕊️ {} ko unban kar diya gaya. ✅",
+        "kicked": "👢 <b>KICKED!</b> {} ko nikal diya gaya. 🚪",
+        "muted": "🔇 <b>MUTED!</b> {} ko chup karaya gaya. 🤐",
+        "unmuted": "🔊 <b>UNMUTED!</b> {} ab bol sakta hai. 🗣️",
         "pinned": "📌 Message Pin Ho Gaya!",
         "unpinned": "📍 Message Unpin Ho Gaya!",
-        "admin_error": "⚠️ <b>Error:</b> Action Fail. User Admin Ho Sakta Hai.",
+        "admin_error": "⚠️ <b>Error:</b> Fail. Kya bot Admin hai?",
         "lang_changed": "🌐 Language Hindi Mein Badli! 🇮🇳"
     }
 }
@@ -132,7 +148,6 @@ async def auto_unban(context: ContextTypes.DEFAULT_TYPE):
     try: await context.bot.unban_chat_member(job.chat_id, job.data['user_id'])
     except: pass
 
-# --- GIF Fetcher ---
 def fetch_gif(action):
     try:
         url = f"https://nekos.best/api/v2/{action}"
@@ -208,28 +223,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat_id
     user_id = query.from_user.id
     
-    if data == "m_main": await query.edit_message_text("🛡️ <b>Aegis V16.0 Main Menu</b>\n\n👑 <b>Creator:</b> Aman", reply_markup=main_menu(), parse_mode='HTML')
-    elif data == "m_mod": await query.edit_message_text("🛡️ <b>Moderation Menu</b>", reply_markup=mod_menu(), parse_mode='HTML')
-    elif data == "m_fun": await query.edit_message_text("🎮 <b>Fun & Games Menu</b>", reply_markup=fun_menu(), parse_mode='HTML')
-    elif data == "m_shayari": await query.edit_message_text("🖋️ <b>Shayari Menu</b>\nApni Pasand Chuno:", reply_markup=shayari_menu(), parse_mode='HTML')
-    elif data == "m_eco": await query.edit_message_text("💰 <b>Economy & Games Menu</b>", reply_markup=eco_menu(), parse_mode='HTML')
+    if data == "m_main": 
+        await query.edit_message_text(
+            "⚡ <b>Aegis Premium Panel</b> ⚡\n\n"
+            "👑 <b>System Developer:</b> <code>Aman</code>\n"
+            "🔥 <i>The Ultimate Architecture</i>\n\n"
+            "👇 Select a category:", 
+            reply_markup=main_menu(), parse_mode='HTML'
+        )
+    elif data == "m_mod": await query.edit_message_text("🛡️ <b>Moderation</b>", reply_markup=mod_menu(), parse_mode='HTML')
+    elif data == "m_fun": await query.edit_message_text("🎮 <b>Fun & Games</b>", reply_markup=fun_menu(), parse_mode='HTML')
+    elif data == "m_shayari": await query.edit_message_text("🖋️ <b>Shayari Menu</b>", reply_markup=shayari_menu(), parse_mode='HTML')
+    elif data == "m_eco": await query.edit_message_text("💰 <b>Economy</b>", reply_markup=eco_menu(), parse_mode='HTML')
     elif data == "m_trace":
-        await query.edit_message_text("🏃 <b>Word Trace Game</b>\n\nType <code>/trace</code> to start a new game!", parse_mode='HTML', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_fun")]]))
+        await query.edit_message_text("🏃 <b>Word Trace Game</b>\n\nType <code>/trace</code> to start!", parse_mode='HTML', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_fun")]]))
     
     elif data == "m_admin":
         text = "👑 <b>Admin Levels</b>\n\n<code>/promote @user 1</code> - Mod\n<code>/promote @user 2</code> - Admin\n<code>/promote @user 3</code> - Co-Owner\n<code>/demote @user</code>"
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_main")]]), parse_mode='HTML')
     elif data == "m_notes":
-        text = "📝 <b>Notes System</b>\n\n<code>/save name text</code>\n<code>/get name</code>\n<code>/notes</code> (List All)"
+        text = "📝 <b>Notes</b>\n\n<code>/save name text</code>\n<code>/get name</code>\n<code>/notes</code>"
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_main")]]), parse_mode='HTML')
     elif data == "m_badwords":
-        text = "🚫 <b>Blacklist Words</b>\n\n<code>/addbadword gaali</code>\n<code>/delbadword gaali</code>"
+        text = "🚫 <b>Blacklist</b>\n\n<code>/addbadword word</code>\n<code>/delbadword word</code>"
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_main")]]), parse_mode='HTML')
     elif data == "m_filter":
-        text = "⚙️ <b>Filters (Auto-Reply)</b>\n\n<code>/addfilter hello -&gt; Hi!</code>\n<code>/delfilter hello</code>\n<code>/addsticker</code> (Reply)"
+        text = "⚙️ <b>Filters</b>\n\n<code>/addfilter word -&gt; reply</code>\n<code>/delfilter word</code>"
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_main")]]), parse_mode='HTML')
     elif data == "m_lock":
-        text = "🔒 <b>Group Locks</b>\n\n<code>/lock</code> / <code>/unlock</code>\n<code>/lockstickers</code> / <code>/unlockstickers</code>"
+        text = "🔒 <b>Locks</b>\n\n<code>/lock</code> / <code>/unlock</code>\n<code>/lockstickers</code> / <code>/unlockstickers</code>"
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_main")]]), parse_mode='HTML')
     elif data == "m_lang":
         markup = InlineKeyboardMarkup([
@@ -247,7 +269,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         shayari_text = random.choice(SHAYARI.get(category, ["Shayari Nahi Mili."]))
         await query.edit_message_text(f"🖋️ <b>{category.capitalize()} Shayari:</b>\n\n<i>{shayari_text}</i>", reply_markup=shayari_menu(), parse_mode='HTML')
 
-    # Command Details
     elif data == "cmd_ban": await query.edit_message_text("Reply: <code>/ban</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_mod")]]), parse_mode='HTML')
     elif data == "cmd_kick": await query.edit_message_text("Reply: <code>/kick</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_mod")]]), parse_mode='HTML')
     elif data == "cmd_mute": await query.edit_message_text("Reply: <code>/mute</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_mod")]]), parse_mode='HTML')
@@ -260,15 +281,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_roast": await query.edit_message_text("Type: <code>/roast</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_fun")]]), parse_mode='HTML')
     elif data == "cmd_hug": await query.edit_message_text("Reply: <code>/hug</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_fun")]]), parse_mode='HTML')
     elif data == "cmd_slap": await query.edit_message_text("Reply: <code>/slap</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_fun")]]), parse_mode='HTML')
-    elif data == "cmd_bal": await query.edit_message_text("Type: <code>/bal</code> (Or Reply To Someone)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
+    elif data == "cmd_bal": await query.edit_message_text("Type: <code>/bal</code> (Or Reply)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
     elif data == "cmd_daily": await query.edit_message_text("Type: <code>/daily</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
-    elif data == "cmd_pay": await query.edit_message_text("Usage: Reply To User With <code>/pay 100</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
+    elif data == "cmd_pay": await query.edit_message_text("Usage: Reply with <code>/pay 100</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
     elif data == "cmd_kill": await query.edit_message_text("Reply: <code>/kill</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
-    elif data == "cmd_rob": await query.edit_message_text("Reply: <code>/rob</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
+    elif data == "cmd_rob": await query.edit_message_text("Usage: Reply with <code>/rob 100</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
     elif data == "cmd_bet": await query.edit_message_text("Type: <code>/bet 100 dice</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
-    elif data == "cmd_rps": await query.edit_message_text("Type: <code>/rps 100</code> (Reply To Play PvP)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
-    elif data == "cmd_ttt": await query.edit_message_text("Type: <code>/ttt</code> To Play Tic-Tac-Toe Vs Bot!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
-    elif data == "cmd_top": await query.edit_message_text("Type: <code>/top</code> or <code>/globaltop</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
+    elif data == "cmd_rps": await query.edit_message_text("Type: <code>/rps 100</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
+    elif data == "cmd_ttt": await query.edit_message_text("Type: <code>/ttt</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
+    elif data == "cmd_top": await query.edit_message_text("Type: <code>/top</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
 
     # Games Logic
     elif data.startswith("rps_"):
@@ -278,22 +299,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bal = get_user_bal(user_id)
         
         if bal != "♾️ Unlimited" and bal < bet:
-            return await query.edit_message_text("❌ Bhai, Tere Paas Itne Paise Nahi Hain!")
+            return await query.edit_message_text("❌ Insufficient Funds!")
             
         bot_choice = random.choice(["rock", "paper", "scissors"])
         
         if user_choice == bot_choice:
-            result = "🤝 <b>TIE!</b> Paisa Wapas Mil Gaya."
+            result = "🤝 <b>TIE!</b> Money returned."
         elif (user_choice == "rock" and bot_choice == "scissors") or \
              (user_choice == "paper" and bot_choice == "rock") or \
              (user_choice == "scissors" and bot_choice == "paper"):
             update_user_bal(user_id, bet)
-            result = f"🎉 <b>Tune Jeet Liya!</b> Tujhe ${bet} Mile!"
+            result = f"🎉 <b>You Won!</b> Earned ${bet}."
         else:
             update_user_bal(user_id, -bet)
-            result = f"😭 <b>Tu Haar Gaya!</b> Tere ${bet} Kat Gaye."
+            result = f"😭 <b>You Lost!</b> Lost ${bet}."
             
-        await query.edit_message_text(f"Tu: {user_choice.upper()} | Bot: {bot_choice.upper()}\n\n{result}", parse_mode='HTML')
+        await query.edit_message_text(f"You: {user_choice.upper()} | Bot: {bot_choice.upper()}\n\n{result}", parse_mode='HTML')
 
     elif data.startswith("rpspvp_"):
         parts = data.split("_")
@@ -303,27 +324,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p2_id = int(parts[4])
         
         if query.from_user.id != p2_id:
-            return await query.answer("Ye challenge tumhare liye nahi hai!", show_alert=True)
+            return await query.answer("This challenge is not for you!", show_alert=True)
             
         if get_user_bal(p1_id) < bet or get_user_bal(p2_id) < bet:
-            return await query.answer("Kisi ek ke paas paise nahi hain!", show_alert=True)
+            return await query.answer("One player lacks funds!", show_alert=True)
             
         p1_choice = random.choice(["rock", "paper", "scissors"])
         p1_name = "Challenger"
         p2_name = query.from_user.first_name
         
         if p1_choice == p2_choice:
-            result = "🤝 <b>TIE!</b> Paisa Wapas Mil Gaya."
+            result = "🤝 <b>TIE!</b> Money returned."
         elif (p1_choice == "rock" and p2_choice == "scissors") or \
              (p1_choice == "paper" and p2_choice == "rock") or \
              (p1_choice == "scissors" and p2_choice == "paper"):
             update_user_bal(p1_id, bet)
             update_user_bal(p2_id, -bet)
-            result = f"🏆 <b>Challenger Jeet Gaya!</b>\nUska choice: {p1_choice.upper()}\nTujhe ${bet} ka nuksan hua."
+            result = f"🏆 <b>Challenger Won!</b>\nChoice: {p1_choice.upper()}\nLost ${bet}."
         else:
             update_user_bal(p1_id, -bet)
             update_user_bal(p2_id, bet)
-            result = f"🎉 <b>Tu Jeet Gaya!</b>\nUska choice: {p1_choice.upper()}\nTujhe ${bet} mile!"
+            result = f"🎉 <b>You Won!</b>\nChoice: {p1_choice.upper()}\nEarned ${bet}."
             
         await query.edit_message_text(f"⚔️ <b>PvP Result</b>\n\n{p2_name}: {p2_choice.upper()}\n{p1_name}: {p1_choice.upper()}\n\n{result}", parse_mode='HTML')
 
@@ -332,11 +353,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         idx = int(parts[1])
         
         if chat_id not in ttt_games:
-            return await query.answer("Game Over! Start A New One With /ttt", show_alert=True)
+            return await query.answer("Game Over! Start a new one with /ttt", show_alert=True)
             
         board, turn = ttt_games[chat_id]
         if board[idx] != "⬜":
-            return await query.answer("Jagah Already Bhri Hui Hai!", show_alert=True)
+            return await query.answer("Spot already taken!", show_alert=True)
             
         board[idx] = "❌"
         ttt_games[chat_id] = (board, "O")
@@ -344,7 +365,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if check_win(board, "❌"):
             del ttt_games[chat_id]
             update_user_bal(user_id, 200)
-            return await query.edit_message_text(f"🎉 <b>Tune Bot Ko Hara Diya!</b> Inaam: $200", parse_mode='HTML')
+            return await query.edit_message_text(f"🎉 <b>You beat the Bot!</b> Reward: $200", parse_mode='HTML')
             
         empty_spots = [i for i, val in enumerate(board) if val == "⬜"]
         if empty_spots:
@@ -355,13 +376,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if check_win(board, "⭕"):
                 del ttt_games[chat_id]
                 update_user_bal(user_id, -100)
-                return await query.edit_message_text(f"🤖 <b>Bot Ne Tujhe Hara Diya!</b> Tere $100 Kat Gaye.", parse_mode='HTML', reply_markup=generate_ttt_board(board))
+                return await query.edit_message_text(f"🤖 <b>Bot beat you!</b> Lost $100.", parse_mode='HTML', reply_markup=generate_ttt_board(board))
         
         if not empty_spots:
             del ttt_games[chat_id]
-            return await query.edit_message_text("🤝 <b>Tie Ho Gaya!</b> Koi Paisa Nahi Kata.", parse_mode='HTML', reply_markup=generate_ttt_board(board))
+            return await query.edit_message_text("🤝 <b>Tie!</b> No money lost.", parse_mode='HTML', reply_markup=generate_ttt_board(board))
             
-        await query.edit_message_text("Teri Turn! (Tu ❌ Hai)", reply_markup=generate_ttt_board(board))
+        await query.edit_message_text("Your turn! (You are ❌)", reply_markup=generate_ttt_board(board))
 
 def check_win(board, player):
     wins = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
@@ -383,7 +404,12 @@ def generate_ttt_board(board):
 # --- Core Commands ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chats_col.update_one({"chat_id": update.effective_chat.id}, {"$set": {"chat_id": update.effective_chat.id}}, upsert=True)
-    text = "🔥 <b>Welcome To Aegis V16.0</b> 🔥\n\nGames, Economy Aur Moderation Ka Perfect Combo.\n\n👑 <b>Creator:</b> Aman\n\n👇 Select A Category Below:"
+    text = (
+        "⚡ <b>Aegis Premium Panel</b> ⚡\n\n"
+        "👑 <b>System Developer:</b> <code>Aman</code>\n"
+        "🔥 <i>The Ultimate Architecture</i>\n\n"
+        "👇 Select a category below:"
+    )
     await update.message.reply_text(text, reply_markup=main_menu(), parse_mode='HTML')
 
 async def set_lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -397,10 +423,9 @@ async def set_lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def trace_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in trace_games:
-        return await update.message.reply_text("❌ Ek game pehle se chal raha hai! Thoda wait karo.")
+        return await update.message.reply_text("❌ A game is already running!")
         
     word = random.choice(TRACE_WORDS)
-    # Scramble word
     word_list = list(word)
     random.shuffle(word_list)
     scrambled = "".join(word_list)
@@ -408,14 +433,12 @@ async def trace_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trace_games[chat_id] = word
     
     await update.message.reply_text(
-        f"🏃 <b>WORD TRACE GAME!</b> 🏃\n\n"
-        f"Sabse pehle is scrambled word ko sahi solve karo:\n"
+        f"🏃 <b>WORD TRACE!</b> 🏃\n\n"
+        f"Unscramble this word:\n"
         f"👉 <code>{scrambled}</code> 👈\n\n"
-        f"Jeetne wale ko milenge <b>$200</b>! (Time: 60 seconds)",
+        f"First to answer gets <b>$200</b>! (60s)",
         parse_mode='HTML'
     )
-    
-    # 60 Second Timeout
     context.job_queue.run_once(trace_timeout, 60, chat_id=chat_id)
 
 async def trace_timeout(context: ContextTypes.DEFAULT_TYPE):
@@ -423,7 +446,7 @@ async def trace_timeout(context: ContextTypes.DEFAULT_TYPE):
     chat_id = job.chat_id
     if chat_id in trace_games:
         del trace_games[chat_id]
-        await context.bot.send_message(chat_id, "⏰ <b>Time Over!</b> Kisi ne sahi jawab nahi diya. Game cancel ho gaya.", parse_mode='HTML')
+        await context.bot.send_message(chat_id, "⏰ <b>Time Over!</b> Game cancelled.", parse_mode='HTML')
 
 # --- Owner Panel ---
 async def owner_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -438,46 +461,35 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = " ".join(context.args)
     chats = chats_col.find()
     success, fail = 0, 0
+    status_msg = await update.message.reply_text("📢 <b>Broadcasting...</b>", parse_mode='HTML')
+    
     for chat in chats:
         try:
-            await context.bot.send_message(chat['chat_id'], f"📢 <b>Announcement:</b>\n\n{msg}", parse_mode='HTML')
+            await context.bot.send_message(chat['chat_id'], f"📢 <b>ANNOUNCEMENT:</b>\n\n{msg}", parse_mode='HTML')
             success += 1
         except: fail += 1
-    await update.message.reply_text(f"✅ Broadcast Sent!\nSuccess: {success}\nFailed: {fail}")
+        
+    await status_msg.edit_text(f"✅ <b>Broadcast Complete!</b>\n\nSuccess: {success}\nFailed: {fail}", parse_mode='HTML')
 
 async def gban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     target = await get_target(update, context)
-    if not target: return await update.message.reply_text("Reply To A User To GBAN.")
+    if not target: return await update.message.reply_text("Reply to a user to GBAN.")
     gbans_col.insert_one({"user_id": target.id})
     chats = chats_col.find()
     for chat in chats:
         try: await context.bot.ban_chat_member(chat['chat_id'], target.id)
         except: pass
-    await update.message.reply_text(f"🔨 <b>GBANNED!</b> {target.first_name} Across All Groups.", parse_mode='HTML')
-
-# --- Custom Chatting Commands ---
-async def add_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2: return await update.message.reply_text("🚫 Admin Only.")
-    if len(context.args) < 2: return await update.message.reply_text("Usage: <code>/addreply trigger_word Reply Text Here</code>", parse_mode='HTML')
-    trigger = context.args[0].lower()
-    reply_text = " ".join(context.args[1:])
-    chat_replies_col.update_one({"chat_id": update.effective_chat.id, "trigger": trigger}, {"$push": {"replies": reply_text}}, upsert=True)
-    await update.message.reply_text(f"✅ Custom Reply Added For <code>{trigger}</code>!", parse_mode='HTML')
-
-async def del_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2 or not context.args: return
-    chat_replies_col.delete_one({"chat_id": update.effective_chat.id, "trigger": context.args[0].lower()})
-    await update.message.reply_text(f"🗑️ Custom Reply Removed For <code>{context.args[0].lower()}</code>", parse_mode='HTML')
+    await update.message.reply_text(f"🔨 <b>GBANNED!</b> {target.first_name}", parse_mode='HTML')
 
 # --- Economy & Betting ---
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = update.message.reply_to_message.from_user if update.message.reply_to_message else update.effective_user
     bal = get_user_bal(target.id)
     if target.id == update.effective_user.id:
-        await update.message.reply_text(f"💰 <b>{target.first_name}</b>, Aapke Paas <b>{bal}</b> Hain.", parse_mode='HTML')
+        await update.message.reply_text(f"💰 <b>{target.first_name}</b>, Balance: <b>{bal}</b>", parse_mode='HTML')
     else:
-        await update.message.reply_text(f"💰 <b>{target.first_name}</b> Ke Paas <b>{bal}</b> Hain.", parse_mode='HTML')
+        await update.message.reply_text(f"💰 <b>{target.first_name}</b>'s Balance: <b>{bal}</b>", parse_mode='HTML')
 
 async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -490,41 +502,41 @@ async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
             time_left = timedelta(hours=24) - (now - last_daily)
             hours, remainder = divmod(time_left.seconds, 3600)
             minutes, _ = divmod(remainder, 60)
-            return await update.message.reply_text(f"⏳ Ruko Bhai! Agla Daily Claim Karne Mein {hours}h {minutes}m Bache Hain.")
+            return await update.message.reply_text(f"⏳ Wait {hours}h {minutes}m for next daily.")
     
     update_user_bal(user_id, 500)
     users_col.update_one({"user_id": user_id}, {"$set": {"last_daily": now}}, upsert=True)
-    await update.message.reply_text(f"🎁 <b>Daily Claimed!</b>\nAapko $500 Mile Hain. Ab Total Balance: {get_user_bal(user_id)}", parse_mode='HTML')
+    await update.message.reply_text(f"🎁 <b>Daily Claimed!</b>\nEarned $500. Total: {get_user_bal(user_id)}", parse_mode='HTML')
 
 async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = await get_target(update, context)
-    if not target: return await update.message.reply_text("Kisko Pay Karna Hai? Reply Karo.")
-    if not context.args or len(context.args) < 2:
-        return await update.message.reply_text("Usage: Reply To User With `/pay 100`")
-    try: amount = int(context.args[1])
-    except: return await update.message.reply_text("Sahi Amount Daalo.")
+    if not target: return await update.message.reply_text("Reply to a user to pay.")
+    if not context.args or len(context.args) < 1:
+        return await update.message.reply_text("Usage: Reply with `/pay 100`")
+    try: amount = int(context.args[0])
+    except: return await update.message.reply_text("Invalid amount.")
     
-    if amount <= 0: return await update.message.reply_text("Positive Amount Daalo.")
+    if amount <= 0: return await update.message.reply_text("Amount must be positive.")
     
     if update.effective_user.id != OWNER_ID:
         if get_user_bal(update.effective_user.id) < amount:
-            return await update.message.reply_text("❌ Aapke Paas Itne Paise Nahi Hain!")
+            return await update.message.reply_text("❌ Insufficient funds!")
         
     update_user_bal(update.effective_user.id, -amount)
     update_user_bal(target.id, amount)
-    await update.message.reply_text(f"💸 <b>Transfer Successful!</b>\n{update.effective_user.first_name} Ne {target.first_name} Ko ${amount} Bheje.", parse_mode='HTML')
+    await update.message.reply_text(f"💸 <b>Transferred!</b>\n{update.effective_user.first_name} sent ${amount} to {target.first_name}.", parse_mode='HTML')
 
 async def bet_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 2: return await update.message.reply_text("Usage: <code>/bet 100 dice</code> (Dice, Dart, Basket, Bowling)", parse_mode='HTML')
+    if len(context.args) < 2: return await update.message.reply_text("Usage: <code>/bet 100 dice</code>")
     try: amount = int(context.args[0])
-    except: return await update.message.reply_text("Sahi Amount Daalo.")
+    except: return await update.message.reply_text("Invalid amount.")
     game_type = context.args[1].lower()
     
     if game_type not in ['dice', 'dart', 'basket', 'bowling']:
-        return await update.message.reply_text("Sirf Ye Games Allowed Hain: Dice, Dart, Basket, Bowling")
+        return await update.message.reply_text("Allowed: dice, dart, basket, bowling")
         
     if update.effective_user.id != OWNER_ID and get_user_bal(update.effective_user.id) < amount:
-        return await update.message.reply_text("❌ Aapke Paas Itne Paise Nahi Hain!")
+        return await update.message.reply_text("❌ Insufficient funds!")
         
     update_user_bal(update.effective_user.id, -amount)
     msg = await context.bot.send_dice(update.effective_chat.id, emoji=game_type)
@@ -539,50 +551,101 @@ async def bet_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if win:
         update_user_bal(update.effective_user.id, amount * 2)
-        await update.message.reply_text(f"🎉 <b>Tu Jeet Gaya!</b> Result: {value}\nTujhe ${amount*2} Mile!", parse_mode='HTML')
+        await update.message.reply_text(f"🎉 <b>You Won!</b> Result: {value}. Earned ${amount*2}.", parse_mode='HTML')
     else:
-        await update.message.reply_text(f"😭 <b>Tu Haar Gaya!</b> Result: {value}\nTere ${amount} Kat Gaye.", parse_mode='HTML')
+        await update.message.reply_text(f"😭 <b>You Lost!</b> Result: {value}. Lost ${amount}.", parse_mode='HTML')
+
+async def rob_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target = await get_target(update, context)
+    if not target: return await update.message.reply_text("Reply to a user to rob.")
+    if not context.args:
+        return await update.message.reply_text("Usage: Reply with `/rob <amount>`")
+    
+    try: amount = int(context.args[0])
+    except: return await update.message.reply_text("Invalid amount.")
+    
+    if amount <= 0: return await update.message.reply_text("Amount must be positive.")
+    if target.id == update.effective_user.id: return await update.message.reply_text("You cannot rob yourself!")
+    
+    if get_user_bal(update.effective_user.id) < amount:
+        return await update.message.reply_text("❌ You don't have that much money to risk!")
+        
+    if get_user_bal(target.id) < amount:
+        return await update.message.reply_text("😂 Target doesn't have that much money!")
+
+    success = random.choice([True, False])
+    if success:
+        gif = random.choice(ROB_GIFS_SUCCESS)
+        update_user_bal(target.id, -amount)
+        update_user_bal(update.effective_user.id, amount)
+        caption = f"🕵️‍♂️ <b>ROBBED!</b>\n\n{update.effective_user.first_name} stole ${amount} from {target.first_name}!"
+    else:
+        gif = random.choice(ROB_GIFS_FAIL)
+        update_user_bal(update.effective_user.id, -amount)
+        update_user_bal(target.id, amount)
+        caption = f"🚨 <b>CAUGHT!</b>\n\n{update.effective_user.first_name} failed to rob {target.first_name} and paid ${amount} as a fine!"
+        
+    await update.message.reply_animation(animation=gif, caption=caption, parse_mode='HTML')
+
+async def kill_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target = await get_target(update, context)
+    if not target: return await update.message.reply_text("Reply to a user to kill.")
+    if target.id == update.effective_user.id: return await update.message.reply_text("Suicide is not allowed!")
+    if get_user_bal(update.effective_user.id) < 50:
+        return await update.message.reply_text("❌ Need $50 to attempt a kill.")
+    
+    update_user_bal(update.effective_user.id, -50)
+    success = random.choice([True, False])
+    if success:
+        gif = fetch_gif("kill") or "https://media.tenor.com/B8J4vI8q4AAAAAC/thor-hammer.gif"
+        update_user_bal(update.effective_user.id, 100)
+        caption = f"☠️ <b>KILLED!</b>\n\n{update.effective_user.first_name} killed {target.first_name}!\n💰 Reward: $100"
+    else:
+        gif = fetch_gif("cry") or "https://media.tenor.com/M8J4vI8q4AAAAAC/shut-up.gif"
+        caption = f"😂 <b>MISSED!</b>\n\n{update.effective_user.first_name} missed the attack!\n💸 Lost $50."
+        
+    await update.message.reply_animation(animation=gif, caption=caption, parse_mode='HTML')
 
 async def rps_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args: return await update.message.reply_text("Usage: <code>/rps 100</code> (Reply To Someone For PvP)", parse_mode='HTML')
+    if not context.args: return await update.message.reply_text("Usage: <code>/rps 100</code>")
     try: bet = int(context.args[0])
-    except: return await update.message.reply_text("Sahi Amount Daalo.")
+    except: return await update.message.reply_text("Invalid amount.")
     
     challenger = update.effective_user
     opponent = update.message.reply_to_message.from_user if update.message.reply_to_message else None
     
     if opponent and opponent.id != challenger.id:
         if update.effective_user.id != OWNER_ID and get_user_bal(challenger.id) < bet:
-            return await update.message.reply_text("❌ Aapke Paas Itne Paise Nahi Hain!")
+            return await update.message.reply_text("❌ Insufficient funds!")
             
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("🪨 Rock", callback_data=f"rpspvp_rock_{bet}_{challenger.id}_{opponent.id}"), 
              InlineKeyboardButton("📄 Paper", callback_data=f"rpspvp_paper_{bet}_{challenger.id}_{opponent.id}")],
             [InlineKeyboardButton("✂️ Scissors", callback_data=f"rpspvp_scissors_{bet}_{challenger.id}_{opponent.id}")]
         ])
-        await update.message.reply_text(f"⚔️ <b>PvP Challenge!</b>\n\n{challenger.first_name} ne {opponent.first_name} ko ${bet} ke liye challenge kiya!\n\n{opponent.first_name}, apna choice chuno:", reply_markup=markup, parse_mode='HTML')
+        await update.message.reply_text(f"⚔️ <b>PvP Challenge!</b>\n\n{challenger.first_name} challenged {opponent.first_name} for ${bet}!\n\n{opponent.first_name}, choose:", reply_markup=markup, parse_mode='HTML')
     else:
         if update.effective_user.id != OWNER_ID and get_user_bal(challenger.id) < bet:
-            return await update.message.reply_text("❌ Aapke Paas Itne Paise Nahi Hain!")
+            return await update.message.reply_text("❌ Insufficient funds!")
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("🪨 Rock", callback_data=f"rps_rock_{bet}"), InlineKeyboardButton("📄 Paper", callback_data=f"rps_paper_{bet}")],
             [InlineKeyboardButton("✂️ Scissors", callback_data=f"rps_scissors_{bet}")]
         ])
-        await update.message.reply_text(f"✊ <b>Rock Paper Scissors (Vs Bot)</b>\nBet: ${bet}\nApna Choice Chuno:", reply_markup=markup, parse_mode='HTML')
+        await update.message.reply_text(f"✊ <b>RPS (vs Bot)</b>\nBet: ${bet}\nChoose:", reply_markup=markup, parse_mode='HTML')
 
 async def ttt_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id in ttt_games:
-        return await update.message.reply_text("Is Group Mein Ek Game Pehle Se Chal Raha Hai!")
+        return await update.message.reply_text("Game already running!")
         
     board = ["⬜"] * 9
     ttt_games[update.effective_chat.id] = (board, "❌")
-    await update.message.reply_text("❌ <b>Tic-Tac-Toe (Tu Vs Bot)</b>\nTu ❌ Hai, Bot ⭕ Hai. Teri Turn:", reply_markup=generate_ttt_board(board), parse_mode='HTML')
+    await update.message.reply_text("❌ <b>Tic-Tac-Toe (vs Bot)</b>\nYour turn:", reply_markup=generate_ttt_board(board), parse_mode='HTML')
 
 async def top_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     top_users = list(users_col.find().sort("balance", -1).limit(10))
-    if not top_users: return await update.message.reply_text("Abhi Tak Kisi Ne Paise Nahi Kamaye!")
+    if not top_users: return await update.message.reply_text("No data yet!")
     
-    text = "🏆 <b>GLOBAL LEADERBOARD (Top 10)</b> 🏆\n\n"
+    text = "🏆 <b>GLOBAL LEADERBOARD</b> 🏆\n\n"
     for i, user in enumerate(top_users, 1):
         try:
             u = await context.bot.get_chat(user['user_id'])
@@ -597,20 +660,20 @@ async def top_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_chat.id)
     if await get_user_level(update, context) < 2: return await update.message.reply_text(LANGS[lang]["denied"], parse_mode='HTML')
-    if not update.message.reply_to_message: return await update.message.reply_text("❌ Reply To A Message To Pin.")
+    if not update.message.reply_to_message: return await update.message.reply_text("Reply to a message to pin.")
     try:
         await context.bot.pin_chat_message(update.effective_chat.id, update.message.reply_to_message.message_id)
         await update.message.reply_text(LANGS[lang]["pinned"], parse_mode='HTML')
-    except Exception: await update.message.reply_text(LANGS[lang]["admin_error"], parse_mode='HTML')
+    except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def unpin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_chat.id)
     if await get_user_level(update, context) < 2: return await update.message.reply_text(LANGS[lang]["denied"], parse_mode='HTML')
-    if not update.message.reply_to_message: return await update.message.reply_text("❌ Reply To A Message To Unpin.")
+    if not update.message.reply_to_message: return await update.message.reply_text("Reply to a message to unpin.")
     try:
         await context.bot.unpin_chat_message(update.effective_chat.id, update.message.reply_to_message.message_id)
         await update.message.reply_text(LANGS[lang]["unpinned"], parse_mode='HTML')
-    except Exception: await update.message.reply_text(LANGS[lang]["admin_error"], parse_mode='HTML')
+    except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_chat.id)
@@ -626,7 +689,7 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = f"{prefix}{LANGS[lang]['banned'].format(target.first_name)}"
         if BAN_GIFS: await update.message.reply_animation(animation=random.choice(BAN_GIFS), caption=caption, parse_mode='HTML')
         else: await update.message.reply_text(caption, parse_mode='HTML')
-    except Exception: await update.message.reply_text(LANGS[lang]["admin_error"], parse_mode='HTML')
+    except Exception as e: await update.message.reply_text(f"❌ Error: {e}. Is Bot Admin?")
 
 async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_chat.id)
@@ -636,7 +699,7 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.unban_chat_member(update.effective_chat.id, target.id)
         await update.message.reply_text(LANGS[lang]['unbanned'].format(target.first_name), parse_mode='HTML')
-    except Exception: await update.message.reply_text(LANGS[lang]["admin_error"], parse_mode='HTML')
+    except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def kick_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_chat.id)
@@ -651,7 +714,7 @@ async def kick_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = LANGS[lang]['kicked'].format(target.first_name)
         if BAN_GIFS: await update.message.reply_animation(animation=random.choice(BAN_GIFS), caption=caption, parse_mode='HTML')
         else: await update.message.reply_text(caption, parse_mode='HTML')
-    except Exception: await update.message.reply_text(LANGS[lang]["admin_error"], parse_mode='HTML')
+    except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_chat.id)
@@ -665,7 +728,7 @@ async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = LANGS[lang]['muted'].format(target.first_name)
         if MUTE_GIFS: await update.message.reply_animation(animation=random.choice(MUTE_GIFS), caption=caption, parse_mode='HTML')
         else: await update.message.reply_text(caption, parse_mode='HTML')
-    except Exception: await update.message.reply_text(LANGS[lang]["admin_error"], parse_mode='HTML')
+    except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_chat.id)
@@ -675,44 +738,33 @@ async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.restrict_chat_member(update.effective_chat.id, target.id, get_chat_permissions())
         await update.message.reply_text(LANGS[lang]['unmuted'].format(target.first_name), parse_mode='HTML')
-    except Exception: await update.message.reply_text(LANGS[lang]["admin_error"], parse_mode='HTML')
+    except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def tmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_chat.id)
     if await get_user_level(update, context) < 1: return await update.message.reply_text(LANGS[lang]["denied"], parse_mode='HTML')
     target = await get_target(update, context)
-    if not target or len(context.args) < 1: return await update.message.reply_text("Usage: <code>/tmute 10m</code>", parse_mode='HTML')
+    if not target or len(context.args) < 1: return await update.message.reply_text("Usage: <code>/tmute 10m</code>")
     time_delta = extract_time(context.args[0])
-    if not time_delta: return await update.message.reply_text("❌ Invalid Time. Use 10m, 1h, 1d.")
+    if not time_delta: return await update.message.reply_text("Invalid time. Use 10m, 1h, 1d.")
     try:
         await context.bot.restrict_chat_member(update.effective_chat.id, target.id, ChatPermissions(can_send_messages=False))
-        await update.message.reply_text(f"⏱️ {target.first_name} Muted For {context.args[0]}.", parse_mode='HTML')
+        await update.message.reply_text(f"⏱️ {target.first_name} muted for {context.args[0]}.", parse_mode='HTML')
         context.job_queue.run_once(auto_unmute, time_delta, chat_id=update.effective_chat.id, data={'user_id': target.id})
-    except Exception: await update.message.reply_text(LANGS[lang]["admin_error"], parse_mode='HTML')
+    except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def tban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_chat.id)
     if await get_user_level(update, context) < 2: return await update.message.reply_text(LANGS[lang]["denied"], parse_mode='HTML')
     target = await get_target(update, context)
-    if not target or len(context.args) < 1: return await update.message.reply_text("Usage: <code>/tban 1d</code>", parse_mode='HTML')
+    if not target or len(context.args) < 1: return await update.message.reply_text("Usage: <code>/tban 1d</code>")
     time_delta = extract_time(context.args[0])
-    if not time_delta: return await update.message.reply_text("❌ Invalid Time.")
+    if not time_delta: return await update.message.reply_text("Invalid time.")
     try:
         await context.bot.ban_chat_member(update.effective_chat.id, target.id)
-        await update.message.reply_text(f"⏱️ {target.first_name} Banned For {context.args[0]}.", parse_mode='HTML')
+        await update.message.reply_text(f"⏱️ {target.first_name} banned for {context.args[0]}.", parse_mode='HTML')
         context.job_queue.run_once(auto_unban, time_delta, chat_id=update.effective_chat.id, data={'user_id': target.id})
-    except Exception: await update.message.reply_text(LANGS[lang]["admin_error"], parse_mode='HTML')
-
-async def tkick_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = get_lang(update.effective_chat.id)
-    if await get_user_level(update, context) < 2: return await update.message.reply_text(LANGS[lang]["denied"], parse_mode='HTML')
-    target = await get_target(update, context)
-    if not target or len(context.args) < 1: return await update.message.reply_text("Usage: <code>/tkick 1h</code>", parse_mode='HTML')
-    try:
-        await context.bot.ban_chat_member(update.effective_chat.id, target.id)
-        await context.bot.unban_chat_member(update.effective_chat.id, target.id)
-        await update.message.reply_text(f"⏱️ {target.first_name} Kicked For {context.args[0]}.", parse_mode='HTML')
-    except Exception: await update.message.reply_text(LANGS[lang]["admin_error"], parse_mode='HTML')
+    except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def warn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_chat.id)
@@ -726,27 +778,58 @@ async def warn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_count = (data.get("count", 0) + 1) if data else 1
     if data: warnings_col.update_one({"_id": data["_id"]}, {"$set": {"count": new_count}})
     else: warnings_col.insert_one({"chat_id": chat_id, "user_id": user_id, "count": new_count})
-    await update.message.reply_text(f"⚠️ {target.first_name} Warned! ({new_count}/3)", parse_mode='HTML')
+    await update.message.reply_text(f"⚠️ {target.first_name} warned! ({new_count}/3)", parse_mode='HTML')
     if new_count >= 3:
         try:
             await context.bot.ban_chat_member(chat_id, user_id)
-            await update.message.reply_text(f"💀 {target.first_name} Banned For 3 Warnings!", parse_mode='HTML')
+            await update.message.reply_text(f"💀 {target.first_name} banned for 3 warnings!", parse_mode='HTML')
             warnings_col.delete_one({"chat_id": chat_id, "user_id": user_id})
-        except Exception: pass
+        except: pass
 
-async def warns_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def promote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = get_lang(update.effective_chat.id)
+    if await get_user_level(update, context) < 3: return await update.message.reply_text(LANGS[lang]["denied"], parse_mode='HTML')
     target = await get_target(update, context)
-    if not target: return
-    data = warnings_col.find_one({"chat_id": update.effective_chat.id, "user_id": target.id})
-    count = data.get("count", 0) if data else 0
-    await update.message.reply_text(f"📊 {target.first_name} Has {count}/3 Warnings.")
+    if not target or len(context.args) < 1: return await update.message.reply_text("Usage: <code>/promote @user 1</code> (1: Mod, 2: Admin, 3: Co-Owner)", parse_mode='HTML')
+    
+    try: level = int(context.args[0]) if context.args[0].isdigit() else int(context.args[1]) # Handle reply or username
+    except:
+        level = 1 # default
 
-async def reset_warns(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2: return
+    try:
+        # Give actual Telegram Admin Rights
+        await context.bot.promote_chat_member(
+            chat_id=update.effective_chat.id,
+            user_id=target.id,
+            can_change_info=True if level >= 2 else False,
+            can_delete_messages=True,
+            can_invite_users=True,
+            can_restrict_members=True if level >= 2 else False,
+            can_pin_messages=True if level >= 2 else False,
+            can_promote_members=True if level == 3 else False
+        )
+        # Save custom level in DB
+        admins_col.update_one({"chat_id": update.effective_chat.id, "user_id": target.id}, {"$set": {"level": level}}, upsert=True)
+        await update.message.reply_text(f"✅ {target.first_name} promoted to Level {level} with Admin Rights!", parse_mode='HTML')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to promote. Error: {e}")
+
+async def demote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = get_lang(update.effective_chat.id)
+    if await get_user_level(update, context) < 3: return await update.message.reply_text(LANGS[lang]["denied"], parse_mode='HTML')
     target = await get_target(update, context)
-    if not target: return
-    warnings_col.delete_one({"chat_id": update.effective_chat.id, "user_id": target.id})
-    await update.message.reply_text(f"✅ Warnings Reset For {target.first_name}.")
+    if not target: return await update.message.reply_text(LANGS[lang]["user_not_found"], parse_mode='HTML')
+    
+    try:
+        await context.bot.promote_chat_member(
+            chat_id=update.effective_chat.id,
+            user_id=target.id,
+            can_change_info=False, can_delete_messages=False, can_invite_users=False,
+            can_restrict_members=False, can_pin_messages=False, can_promote_members=False
+        )
+        admins_col.delete_one({"chat_id": update.effective_chat.id, "user_id": target.id})
+        await update.message.reply_text(f"📉 {target.first_name} demoted!", parse_mode='HTML')
+    except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def purge_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await get_user_level(update, context) < 2: return
@@ -758,7 +841,7 @@ async def purge_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
             deleted += 1
         except: pass
-    await context.bot.send_message(update.effective_chat.id, f"🧹 Deleted {deleted} Messages.")
+    await context.bot.send_message(update.effective_chat.id, f"🧹 Deleted {deleted} messages.")
 
 async def del_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await get_user_level(update, context) < 1: return
@@ -768,229 +851,22 @@ async def del_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.delete()
     except: pass
 
-async def report_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.reply_to_message: return
-    admins = await context.bot.get_chat_administrators(update.effective_chat.id)
-    admin_tags = " ".join([f"[{a.user.first_name}](tg://user?id={a.user.id})" for a in admins if not a.user.is_bot])
-    await update.message.reply_text(f"🚨 REPORT! {update.effective_user.first_name} Reported {update.message.reply_to_message.from_user.first_name}!\n\n{admin_tags}", parse_mode='Markdown')
-
-async def promote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = get_lang(update.effective_chat.id)
-    if await get_user_level(update, context) < 3: return await update.message.reply_text(LANGS[lang]["denied"], parse_mode='HTML')
-    target = await get_target(update, context)
-    if not target or len(context.args) < 2: return await update.message.reply_text("Usage: <code>/promote @user 1</code>", parse_mode='HTML')
-    try: level = int(context.args[1])
-    except: return await update.message.reply_text("❌ Level 1, 2 Or 3.", parse_mode='HTML')
-    if level not in [1, 2, 3]: return await update.message.reply_text("❌ Level 1, 2 Or 3.", parse_mode='HTML')
-    admins_col.update_one({"chat_id": update.effective_chat.id, "user_id": target.id}, {"$set": {"level": level}}, upsert=True)
-    await update.message.reply_text(f"✅ {target.first_name} Promoted To Level {level}!", parse_mode='HTML')
-
-async def demote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = get_lang(update.effective_chat.id)
-    if await get_user_level(update, context) < 3: return await update.message.reply_text(LANGS[lang]["denied"], parse_mode='HTML')
-    target = await get_target(update, context)
-    if not target: return await update.message.reply_text(LANGS[lang]["user_not_found"], parse_mode='HTML')
-    admins_col.delete_one({"chat_id": update.effective_chat.id, "user_id": target.id})
-    await update.message.reply_text(f"📉 {target.first_name} Demoted!", parse_mode='HTML')
-
-# --- Fun Commands ---
-async def truth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
-    truth = random.choice(TRUTHS)
-    if target: await update.message.reply_text(f"🎯 <b>Truth For {target.first_name}:</b>\n\n{truth}", parse_mode='HTML')
-    else: await update.message.reply_text(f"🎯 <b>Truth:</b>\n\n{truth}", parse_mode='HTML')
-
-async def dare_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
-    dare = random.choice(DARES)
-    if target: await update.message.reply_text(f"🔥 <b>Dare For {target.first_name}:</b>\n\n{dare}", parse_mode='HTML')
-    else: await update.message.reply_text(f"🔥 <b>Dare:</b>\n\n{dare}", parse_mode='HTML')
-
-async def rizz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
-    rizz = random.choice(RIZZ)
-    if target: await update.message.reply_text(f"💘 {update.effective_user.first_name} To {target.first_name}:\n\n<i>{rizz}</i>", parse_mode='HTML')
-    else: await update.message.reply_text(f"💘 <i>{rizz}</i>", parse_mode='HTML')
-
-async def roast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
-    roast = random.choice(ROASTS)
-    if target: await update.message.reply_text(f"😂 <b>{target.first_name}</b>, {roast}", parse_mode='HTML')
-    else: await update.message.reply_text(f"😂 {roast}", parse_mode='HTML')
-
-async def action_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, action_name):
-    if not update.message.reply_to_message: return await update.message.reply_text(f"Reply To Someone With /{action_name}")
-    target = update.message.reply_to_message.from_user
-    user = update.effective_user.first_name
-    gif_url = fetch_gif(action_name)
-    caption = f"✨ <b>{user}</b> {action_name}ed <b>{target.first_name}</b>! 😂"
-    if gif_url: await update.message.reply_animation(animation=gif_url, caption=caption, parse_mode='HTML')
-    else: await update.message.reply_text(caption, parse_mode='HTML')
-
-async def hug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "hug")
-async def slap_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "slap")
-async def kiss_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "kiss")
-async def punch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "punch")
-async def pat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "pat")
-async def cuddle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "cuddle")
-async def poke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "poke")
-
-# --- Desi Commands ---
-async def desi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, action_name):
-    if not update.message.reply_to_message: return await update.message.reply_text(f"Reply To Someone With /{action_name}")
-    target = update.message.reply_to_message.from_user
-    user = update.effective_user.first_name
-    
-    captions = {
-        "bhai": f"🤜🤛 <b>{user}</b> aur <b>{target.first_name}</b> - Bhai-bhai!",
-        "bhen": f"🫶 <b>{user}</b> ne <b>{target.first_name}</b> ko bhen bola!",
-        "pyar": f"❤️ <b>{user}</b> ne <b>{target.first_name}</b> se pyar ka izhaar kiya!",
-        "gussa": f"😡 <b>{user}</b> <b>{target.first_name}</b> par aag-baboola ho gaya!",
-        "dost": f"🤝 <b>{user}</b> aur <b>{target.first_name}</b> ab pakke dost hain!",
-        "dushman": f"😎 <b>{user}</b> aur <b>{target.first_name}</b> ki dushmani pakki!",
-        "nacho": f"💃🕺 <b>{user}</b> ne <b>{target.first_name}</b> ke sath non-stop dance kiya!",
-        "chappal": f"🩴 <b>{user}</b> ne <b>{target.first_name}</b> ko chappal se dhoya!",
-        "jhadu": f"🧹 <b>{user}</b> ne <b>{target.first_name}</b> ko jhadu se maara!",
-        "belan": f"🥖 <b>{user}</b> ne <b>{target.first_name}</b> ko belan se takkar di!",
-        "tamacha": f"🖐️ <b>{user}</b> ne <b>{target.first_name}</b> ko zordaar tamacha maara!",
-        "lathi": f"👮‍♂️ <b>{user}</b> ne <b>{target.first_name}</b> par lathi charge kiya!",
-        "kela": f"🍌 <b>{user}</b> ne <b>{target.first_name}</b> ko kele se maara!",
-        "chai": f"☕ <b>{user}</b> ne <b>{target.first_name}</b> par garam chai girayi!",
-        "mirchi": f"🌶️ <b>{user}</b> ne <b>{target.first_name}</b> ko mirchi khilayi!",
-        "dhoka": f"🗡️ <b>{user}</b> ne <b>{target.first_name}</b> ko dhoka diya!",
-        "kamra": f"🚪 <b>{user}</b> ne <b>{target.first_name}</b> ko kamre se bahar nikala!"
-    }
-    
-    gif_url = fetch_gif(action_name)
-    caption = captions.get(action_name, f"✨ <b>{user}</b> ne {action_name} kiya <b>{target.first_name}</b> par!")
-    
-    if gif_url: await update.message.reply_animation(animation=gif_url, caption=caption, parse_mode='HTML')
-    else: await update.message.reply_text(caption, parse_mode='HTML')
-
-async def bhai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "bhai")
-async def bhen_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "bhen")
-async def pyar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "pyar")
-async def gussa_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "gussa")
-async def dost_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "dost")
-async def dushman_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "dushman")
-async def nacho_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "nacho")
-async def chappal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "chappal")
-async def jhadu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "jhadu")
-async def belan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "belan")
-async def tamacha_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "tamacha")
-async def lathi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "lathi")
-async def kela_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "kela")
-async def chai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "chai")
-async def mirchi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "mirchi")
-async def dhoka_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "dhoka")
-async def kamra_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await desi_cmd(update, context, "kamra")
-
-async def shayari_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🖋️ <b>Shayari Menu</b>\nApni Pasand Chuno:", reply_markup=shayari_menu(), parse_mode='HTML')
-
-# --- Settings, Notes, Filters, Locks ---
-async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2: return
-    if not update.message.reply_to_message and not context.args: return await update.message.reply_text("Reply Or Write Text.")
-    
-    media_id, media_type = None, None
-    if update.message.reply_to_message:
-        if update.message.reply_to_message.animation: media_id, media_type = update.message.reply_to_message.animation.file_id, "animation"
-        elif update.message.reply_to_message.photo: media_id, media_type = update.message.reply_to_message.photo[-1].file_id, "photo"
-        elif update.message.reply_to_message.video: media_id, media_type = update.message.reply_to_message.video.file_id, "video"
-
-    text = " ".join(context.args) if context.args else "Welcome {name}! 🎉"
-    settings_col.update_one({"chat_id": update.effective_chat.id}, {"$set": {"welcome_text": text, "welcome_media": media_id, "media_type": media_type}}, upsert=True)
-    await update.message.reply_text("🎉 Welcome Updated!")
-
-async def set_goodbye(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2: return
-    if not context.args: return
-    settings_col.update_one({"chat_id": update.effective_chat.id}, {"$set": {"goodbye": " ".join(context.args)}}, upsert=True)
-    await update.message.reply_text("👋 Goodbye Updated!")
-
-async def set_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2: return
-    if not context.args: return
-    settings_col.update_one({"chat_id": update.effective_chat.id}, {"$set": {"rules": " ".join(context.args)}}, upsert=True)
-    await update.message.reply_text("📜 Rules Updated!")
-
-async def show_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = settings_col.find_one({"chat_id": update.effective_chat.id})
-    if data and "rules" in data: await update.message.reply_text(f"📜 <b>Rules:</b>\n{data['rules']}", parse_mode='HTML')
-    else: await update.message.reply_text("❌ No Rules Set.")
-
-async def save_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2: return
-    if len(context.args) < 2: return await update.message.reply_text("Usage: <code>/save name text</code>", parse_mode='HTML')
-    notes_col.update_one({"chat_id": update.effective_chat.id, "name": context.args[0].lower()}, {"$set": {"text": " ".join(context.args[1:])}}, upsert=True)
-    await update.message.reply_text(f"✅ Note <code>{context.args[0].lower()}</code> Saved!", parse_mode='HTML')
-
-async def get_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args: return
-    data = notes_col.find_one({"chat_id": update.effective_chat.id, "name": context.args[0].lower()})
-    if data: await update.message.reply_text(data['text'])
-    else: await update.message.reply_text("❌ Note Not Found.", parse_mode='HTML')
-
-async def list_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    notes = notes_col.find({"chat_id": update.effective_chat.id})
-    text = "📝 <b>Saved Notes:</b>\n" + "\n".join([f"• <code>{n['name']}</code>" for n in notes])
-    await update.message.reply_text(text if notes.count() > 0 else "❌ No Notes Saved.", parse_mode='HTML')
-
-async def clear_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2: return
-    if not context.args: return
-    notes_col.delete_one({"chat_id": update.effective_chat.id, "name": context.args[0].lower()})
-    await update.message.reply_text(f"🗑️ Note Deleted.")
-
-async def add_badword(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2 or not context.args: return
-    badwords_col.update_one({"chat_id": update.effective_chat.id, "word": context.args[0].lower()}, {"$set": {"word": context.args[0].lower()}}, upsert=True)
-    await update.message.reply_text(f"✅ <code>{context.args[0].lower()}</code> Blacklisted.", parse_mode='HTML')
-
-async def del_badword(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2 or not context.args: return
-    badwords_col.delete_one({"chat_id": update.effective_chat.id, "word": context.args[0].lower()})
-    await update.message.reply_text(f"🗑️ <code>{context.args[0].lower()}</code> Removed.", parse_mode='HTML')
-
-async def add_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2: return
-    if "->" not in update.message.text: return await update.message.reply_text("Format: <code>/addfilter hello -&gt; Hi!</code>", parse_mode='HTML')
-    parts = update.message.text.split("->", 1)
-    trigger = parts[0].replace("/addfilter", "").strip().lower()
-    filters_col.update_one({"chat_id": update.effective_chat.id, "trigger": trigger}, {"$set": {"reply": parts[1].strip()}}, upsert=True)
-    await update.message.reply_text(f"✅ Filter Added For <code>{trigger}</code>", parse_mode='HTML')
-
-async def del_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2 or not context.args: return
-    filters_col.delete_one({"chat_id": update.effective_chat.id, "trigger": context.args[0].lower()})
-    await update.message.reply_text(f"🗑️ Filter Removed For <code>{context.args[0].lower()}</code>", parse_mode='HTML')
-
-async def add_sticker_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2: return
-    if not update.message.reply_to_message or not update.message.reply_to_message.sticker: return await update.message.reply_text("Reply To A Sticker.")
-    sticker_filters_col.update_one({"chat_id": update.effective_chat.id, "sticker_id": update.message.reply_to_message.sticker.file_unique_id}, {"$set": {"reply": "Sticker Detected! 🖼️"}}, upsert=True)
-    await update.message.reply_text("🖼️ Sticker Filter Added!")
-
-async def del_sticker_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await get_user_level(update, context) < 2: return
-    if not update.message.reply_to_message or not update.message.reply_to_message.sticker: return await update.message.reply_text("Reply To A Sticker.")
-    sticker_filters_col.delete_one({"chat_id": update.effective_chat.id, "sticker_id": update.message.reply_to_message.sticker.file_unique_id})
-    await update.message.reply_text("🗑️ Sticker Filter Removed!")
-
+# --- Locks ---
 async def lock_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await get_user_level(update, context) < 2: return
     try:
         await context.bot.set_chat_permissions(update.effective_chat.id, ChatPermissions(can_send_messages=False))
-        await update.message.reply_text("🔒 Group Locked!")
-    except Exception: pass
+        await update.message.reply_text("🔒 Group Locked! (Only Admins can speak)")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}. Bot needs 'Manage Permissions' right.")
 
 async def unlock_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await get_user_level(update, context) < 2: return
     try:
         await context.bot.set_chat_permissions(update.effective_chat.id, get_chat_permissions())
         await update.message.reply_text("🔓 Group Unlocked!")
-    except Exception: pass
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}. Bot needs 'Manage Permissions' right.")
 
 async def lock_stickers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await get_user_level(update, context) < 2: return
@@ -1002,10 +878,95 @@ async def unlock_stickers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings_col.update_one({"chat_id": update.effective_chat.id}, {"$set": {"stickers_locked": False}}, upsert=True)
     await update.message.reply_text("🔓 Stickers Unlocked!")
 
-async def set_afk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reason = " ".join(context.args) if context.args else "No Reason"
-    afk_col.update_one({"chat_id": update.effective_chat.id, "user_id": update.effective_user.id}, {"$set": {"reason": reason}}, upsert=True)
-    await update.message.reply_text(f"💤 {update.effective_user.first_name} Is Now AFK: {reason}")
+# --- Fun, Desi & Action Commands ---
+async def truth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
+    truth = random.choice(TRUTHS)
+    if target: await update.message.reply_text(f"🎯 <b>Truth for {target.first_name}:</b>\n\n{truth}", parse_mode='HTML')
+    else: await update.message.reply_text(f"🎯 <b>Truth:</b>\n\n{truth}", parse_mode='HTML')
+
+async def dare_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
+    dare = random.choice(DARES)
+    if target: await update.message.reply_text(f"🔥 <b>Dare for {target.first_name}:</b>\n\n{dare}", parse_mode='HTML')
+    else: await update.message.reply_text(f"🔥 <b>Dare:</b>\n\n{dare}", parse_mode='HTML')
+
+async def rizz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
+    rizz = random.choice(RIZZ)
+    if target: await update.message.reply_text(f"💘 {update.effective_user.first_name} to {target.first_name}:\n\n<i>{rizz}</i>", parse_mode='HTML')
+    else: await update.message.reply_text(f"💘 <i>{rizz}</i>", parse_mode='HTML')
+
+async def roast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
+    roast = random.choice(ROASTS)
+    if target: await update.message.reply_text(f"😂 <b>{target.first_name}</b>, {roast}", parse_mode='HTML')
+    else: await update.message.reply_text(f"😂 {roast}", parse_mode='HTML')
+
+async def action_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, action_name):
+    if not update.message.reply_to_message: return await update.message.reply_text(f"Reply to someone with /{action_name}")
+    target = update.message.reply_to_message.from_user
+    user = update.effective_user.first_name
+    
+    # Check hardcoded GIFs first
+    gif_url = DESI_GIFS.get(action_name) or fetch_gif(action_name)
+    caption = f"✨ <b>{user}</b> {action_name}ed <b>{target.first_name}</b>! 😂"
+    
+    if gif_url: await update.message.reply_animation(animation=gif_url, caption=caption, parse_mode='HTML')
+    else: await update.message.reply_text(caption, parse_mode='HTML')
+
+async def hug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "hug")
+async def slap_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "slap")
+async def kiss_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "kiss")
+async def punch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "punch")
+async def pat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "pat")
+
+async def bhai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "bhai")
+async def bhen_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "bhen")
+async def pyar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "pyar")
+async def gussa_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "gussa")
+async def dost_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "dost")
+async def dushman_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "dushman")
+async def nacho_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "nacho")
+async def chappal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "chappal")
+async def jhadu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "jhadu")
+async def belan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "belan")
+async def tamacha_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "tamacha")
+async def lathi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "lathi")
+async def kela_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "kela")
+async def chai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "chai")
+async def mirchi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "mirchi")
+async def dhoka_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "dhoka")
+async def kamra_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await action_cmd(update, context, "kamra")
+
+async def shayari_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🖋️ <b>Shayari Menu</b>", reply_markup=shayari_menu(), parse_mode='HTML')
+
+# --- Settings, Notes, Filters ---
+async def save_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await get_user_level(update, context) < 2: return
+    if len(context.args) < 2: return await update.message.reply_text("Usage: <code>/save name text</code>", parse_mode='HTML')
+    notes_col.update_one({"chat_id": update.effective_chat.id, "name": context.args[0].lower()}, {"$set": {"text": " ".join(context.args[1:])}}, upsert=True)
+    await update.message.reply_text(f"✅ Note saved!")
+
+async def get_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args: return
+    data = notes_col.find_one({"chat_id": update.effective_chat.id, "name": context.args[0].lower()})
+    if data: await update.message.reply_text(data['text'])
+    else: await update.message.reply_text("❌ Note not found.")
+
+async def add_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await get_user_level(update, context) < 2: return
+    if "->" not in update.message.text: return await update.message.reply_text("Format: <code>/addfilter hello -&gt; Hi!</code>", parse_mode='HTML')
+    parts = update.message.text.split("->", 1)
+    trigger = parts[0].replace("/addfilter", "").strip().lower()
+    filters_col.update_one({"chat_id": update.effective_chat.id, "trigger": trigger}, {"$set": {"reply": parts[1].strip()}}, upsert=True)
+    await update.message.reply_text(f"✅ Filter added for <code>{trigger}</code>")
+
+async def add_badword(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await get_user_level(update, context) < 2 or not context.args: return
+    badwords_col.update_one({"chat_id": update.effective_chat.id, "word": context.args[0].lower()}, {"$set": {"word": context.args[0].lower()}}, upsert=True)
+    await update.message.reply_text(f"✅ Blacklisted.")
 
 # --- Message Handlers ---
 async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1018,31 +979,19 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         if media and media_type == "animation": await update.message.reply_animation(animation=media, caption=welcome)
         elif media and media_type == "photo": await update.message.reply_photo(photo=media, caption=welcome)
-        elif media and media_type == "video": await update.message.reply_video(video=media, caption=welcome)
         else: await update.message.reply_text(welcome)
         
         if data and "rules" in data: await update.message.reply_text(f"📜 <b>Rules:</b>\n{data['rules']}", parse_mode='HTML')
 
-async def goodbye_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = settings_col.find_one({"chat_id": update.effective_chat.id})
-    if data and "goodbye" in data:
-        await update.message.reply_text(data['goodbye'].replace("{name}", update.message.left_chat_member.first_name))
-
 async def handle_stickers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     data = settings_col.find_one({"chat_id": chat_id})
-    
     if data and data.get("stickers_locked", False):
         if await get_user_level(update, context) < 1:
             try:
                 await update.message.delete()
                 await update.message.reply_text("🔒 Stickers Locked!")
             except: pass
-            return
-            
-    sticker_id = update.message.sticker.file_unique_id
-    sfilter = sticker_filters_col.find_one({"chat_id": chat_id, "sticker_id": sticker_id})
-    if sfilter: await update.message.reply_text(sfilter['reply'])
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
@@ -1050,47 +999,56 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_upper = update.message.text.upper()
     text_lower = update.message.text.lower()
 
-    # --- Trace Game Check ---
+    # Trace Game Check
     if chat_id in trace_games:
         if text_upper == trace_games[chat_id]:
-            # Correct Guess!
             del trace_games[chat_id]
             update_user_bal(user_id, 200)
-            return await update.message.reply_text(f"🎉 <b>SAHI JAWAB!</b> 🎉\n\n{update.effective_user.first_name} ne game jeet liya aur $200 kamaye!", parse_mode='HTML')
+            return await update.message.reply_text(f"🎉 <b>CORRECT!</b>\n\n{update.effective_user.first_name} won $200!", parse_mode='HTML')
 
-    # Reaction System based on text
+    # Reaction System
     try:
-        if any(word in text_lower for word in ["haha", "lol", "lmao", "😂"]):
-            await update.message.set_reaction("😂")
-        elif any(word in text_lower for word in ["sad", "rona", "dukh", "😭"]):
-            await update.message.set_reaction("🥺")
-        elif any(word in text_lower for word in ["gali", "bc", "mc", "chu"]):
-            await update.message.set_reaction("🤮")
-        elif any(word in text_lower for word in ["love", "pyar", "❤️"]):
-            await update.message.set_reaction("❤️")
-        elif any(word in text_lower for word in ["gussa", "angry", "😡"]):
-            await update.message.set_reaction("🤬")
-    except Exception as e:
-        # Ignore reaction errors (often due to Telegram API restrictions)
-        pass
+        if any(word in text_lower for word in ["haha", "lol", "😂"]): await update.message.set_reaction("😂")
+        elif any(word in text_lower for word in ["sad", "rona", "😭"]): await update.message.set_reaction("🥺")
+        elif any(word in text_lower for word in ["gali", "bc", "mc"]): await update.message.set_reaction("🤮")
+        elif any(word in text_lower for word in ["love", "pyar", "❤️"]): await update.message.set_reaction("❤️")
+        elif any(word in text_lower for word in ["gussa", "angry", "😡"]): await update.message.set_reaction("🤬")
+    except: pass
 
+    # Anti-link & Badwords (for non-admins)
     if await get_user_level(update, context) < 1:
         if "http://" in text_lower or "https://" in text_lower or "t.me/" in text_lower:
             try:
                 await update.message.delete()
-                await update.message.reply_text(f"⚠️ {update.effective_user.first_name}, Links Allowed Nahi Hain! 🚫")
+                await update.message.reply_text(f"⚠️ {update.effective_user.first_name}, Links not allowed!")
                 return
             except: pass
+            
+        # Badwords check
+        badwords = badwords_col.find({"chat_id": chat_id})
+        for bw in badwords:
+            if bw['word'] in text_lower:
+                try:
+                    await update.message.delete()
+                    await update.message.reply_text("🚫 Bad word detected!")
+                    return
+                except: pass
+
+    # Chat Data Check
+    for trigger, replies in CHAT_DATA.items():
+        if text_lower == trigger:
+            if random.random() < 0.5: # 50% chance to reply
+                return await update.message.reply_text(random.choice(replies))
 
 # --- Main App ---
 async def post_init(application: Application) -> None:
     commands = [
         BotCommand("start", "Start Bot"), BotCommand("balance", "Check Money"), BotCommand("daily", "Claim Daily $500"),
-        BotCommand("pay", "Transfer Money"), BotCommand("kill", "Kill User"), BotCommand("rob", "Rob User"), BotCommand("bet", "Bet On Dice"),
+        BotCommand("pay", "Transfer Money"), BotCommand("rob", "Rob a user"), BotCommand("kill", "Kill a user"), BotCommand("bet", "Bet On Dice"),
         BotCommand("rps", "Rock Paper Scissors"), BotCommand("ttt", "Tic-Tac-Toe"), BotCommand("trace", "Word Trace Game"),
-        BotCommand("top", "Global Leaderboard"), BotCommand("ban", "Ban"), BotCommand("kick", "Kick"), BotCommand("mute", "Mute"),
+        BotCommand("top", "Leaderboard"), BotCommand("ban", "Ban"), BotCommand("kick", "Kick"), BotCommand("mute", "Mute"),
         BotCommand("t", "Truth"), BotCommand("d", "Dare"), BotCommand("roast", "Roast"), BotCommand("shayari", "Shayari Menu"),
-        BotCommand("chappal", "Chappal Maaro"), BotCommand("bhai", "Bhai Wali Vibe"), BotCommand("pyar", "Pyar Jatao")
+        BotCommand("chappal", "Chappal Maaro"), BotCommand("bhai", "Bhai Wali Vibe")
     ]
     await application.bot.set_my_commands(commands)
 
@@ -1101,18 +1059,16 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("setlang", set_lang_cmd))
-    
     app.add_handler(CommandHandler("owner", owner_panel))
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("gban", gban_user))
-    
-    app.add_handler(CommandHandler("addreply", add_reply))
-    app.add_handler(CommandHandler("delreply", del_reply))
     
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("bal", balance))
     app.add_handler(CommandHandler("daily", daily))
     app.add_handler(CommandHandler("pay", pay))
+    app.add_handler(CommandHandler("rob", rob_user))
+    app.add_handler(CommandHandler("kill", kill_user))
     app.add_handler(CommandHandler("bet", bet_dice))
     app.add_handler(CommandHandler("rps", rps_game))
     app.add_handler(CommandHandler("ttt", ttt_game))
@@ -1127,17 +1083,17 @@ def main():
     app.add_handler(CommandHandler("unmute", unmute_user))
     app.add_handler(CommandHandler("tmute", tmute_user))
     app.add_handler(CommandHandler("tban", tban_user))
-    app.add_handler(CommandHandler("tkick", tkick_user))
     app.add_handler(CommandHandler("pin", pin_message))
     app.add_handler(CommandHandler("unpin", unpin_message))
     app.add_handler(CommandHandler("warn", warn_user))
-    app.add_handler(CommandHandler("warns", warns_check))
-    app.add_handler(CommandHandler("resetwarns", reset_warns))
-    app.add_handler(CommandHandler("purge", purge_messages))
-    app.add_handler(CommandHandler("del", del_message))
-    app.add_handler(CommandHandler("report", report_user))
     app.add_handler(CommandHandler("promote", promote_user))
     app.add_handler(CommandHandler("demote", demote_user))
+    app.add_handler(CommandHandler("purge", purge_messages))
+    app.add_handler(CommandHandler("del", del_message))
+    app.add_handler(CommandHandler("lock", lock_group))
+    app.add_handler(CommandHandler("unlock", unlock_group))
+    app.add_handler(CommandHandler("lockstickers", lock_stickers))
+    app.add_handler(CommandHandler("unlockstickers", unlock_stickers))
     
     app.add_handler(CommandHandler("t", truth_cmd))
     app.add_handler(CommandHandler("d", dare_cmd))
@@ -1148,8 +1104,6 @@ def main():
     app.add_handler(CommandHandler("kiss", kiss_cmd))
     app.add_handler(CommandHandler("punch", punch_cmd))
     app.add_handler(CommandHandler("pat", pat_cmd))
-    app.add_handler(CommandHandler("cuddle", cuddle_cmd))
-    app.add_handler(CommandHandler("poke", poke_cmd))
     
     # Desi Commands
     app.add_handler(CommandHandler("bhai", bhai_cmd))
@@ -1171,34 +1125,17 @@ def main():
     app.add_handler(CommandHandler("kamra", kamra_cmd))
     
     app.add_handler(CommandHandler("shayari", shayari_cmd))
-    
-    app.add_handler(CommandHandler("setwelcome", set_welcome))
-    app.add_handler(CommandHandler("setgoodbye", set_goodbye))
-    app.add_handler(CommandHandler("setrules", set_rules))
-    app.add_handler(CommandHandler("rules", show_rules))
     app.add_handler(CommandHandler("save", save_note))
     app.add_handler(CommandHandler("get", get_note))
-    app.add_handler(CommandHandler("notes", list_notes))
-    app.add_handler(CommandHandler("clear", clear_note))
-    app.add_handler(CommandHandler("addbadword", add_badword))
-    app.add_handler(CommandHandler("delbadword", del_badword))
     app.add_handler(CommandHandler("addfilter", add_filter))
-    app.add_handler(CommandHandler("delfilter", del_filter))
-    app.add_handler(CommandHandler("addsticker", add_sticker_filter))
-    app.add_handler(CommandHandler("delsticker", del_sticker_filter))
-    app.add_handler(CommandHandler("lock", lock_group))
-    app.add_handler(CommandHandler("unlock", unlock_group))
-    app.add_handler(CommandHandler("lockstickers", lock_stickers))
-    app.add_handler(CommandHandler("unlockstickers", unlock_stickers))
-    app.add_handler(CommandHandler("afk", set_afk))
+    app.add_handler(CommandHandler("addbadword", add_badword))
 
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
-    app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, goodbye_member))
     app.add_handler(MessageHandler(filters.Sticker.ALL, handle_stickers))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    print("Aegis V16.0 (The Desi God Mode) running...")
+    print("Aegis V17.0 Premium running...")
     app.run_polling()
 
 if __name__ == '__main__':
