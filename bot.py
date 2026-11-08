@@ -13,7 +13,7 @@ from telegram import Update, ChatPermissions, InlineKeyboardMarkup, InlineKeyboa
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from pymongo import MongoClient
 
-# --- DUMMY SERVER FOR HOSTING ---
+# --- DUMMY SERVER ---
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -35,11 +35,10 @@ except ImportError:
     CHAT_DATA, TRUTHS, DARES, RIZZ, ROASTS, SHAYARI, TRACE_WORDS, TRIVIA_QUESTIONS, DESI_GIFS = {}, [], [], [], [], {}, [], [], {}
     ROB_GIFS_SUCCESS, ROB_GIFS_FAIL, BAN_GIFS, MUTE_GIFS = [], [], [], []
 
-# --- Logging Setup ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Database Setup ---
+# --- Database ---
 MONGO_URI = os.environ.get("MONGODB_URI")
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 
@@ -55,17 +54,68 @@ chats_col = db['chats']
 gbans_col = db['gbans']
 users_col = db['users']
 approved_col = db['approved_users']
+bad_stickers_col = db['bad_stickers']          # NEW
+reports_log_col = db['reports_log']            # NEW
+violations_col = db['violations']              # NEW
 
 # --- Game Memories ---
 ttt_games = {}
 trace_games = {}
 trivia_games = {}
+message_timestamps = defaultdict(list)         # NEW anti-flood
 
-# --- Languages ---
+# ============================================================
+# 🛡️ PROTECTION CONSTANTS (NEW)
+# ============================================================
+ABUSE_SHORTFORMS = {
+    "bc", "mc", "bkl", "bkc", "mkc", "bsdk", "msdk", "chutiya", "chutya",
+    "gandu", "gand", "gaand", "madarchod", "maderchod", "bhenchod", "bhenchd",
+    "chut", "loda", "lodu", "lund", "randi", "harami", "kutta", "kamina",
+    "saala", "sala", "chodu", "choda", "bhadwa", "tatte", "jhat", "jhaat",
+    "chod", "lode", "bhosd", "bhosda", "chhiya", "lavda", "lauda", "theli",
+    "bakland", "baklund", "bkl", "mkl", "chudai", "chodai"
+}
+
+DRUG_KEYWORDS = {
+    "ganja", "charas", "weed", "cocaine", "heroin", "mdma", "lsd", "meth",
+    "opium", "nashe", "nasha", "drugs", "drug", "coke", "chitta", "afim",
+    "afeem", "bhang", "bhaang", "smack", "party drugs", "ice drug",
+    "ganja bechna", "charas bechna", "drugs bechna", "drugs sell",
+    "cocaine sell", "heroin sell", "weed sell", "drug dealer"
+}
+
+NSFW_KEYWORDS = {
+    "porn", "porno", "xxx", "nude", "nudes", "naked", "nangi", "nanga",
+    "sex chat", "horny", "rape", "child porn", "cp", "loli", "incest",
+    "hentai", "nsfw", "onlyfans", "orgy", "18+", "18 plus", "adult video",
+    "sex video", "sexy girl", "chudai video", "blue film", "bf video"
+}
+
+SCAM_KEYWORDS = {
+    "lottery", "prize money", "you won", "click here to claim", "free money",
+    "otp bhejo", "otp send", "verify account", "account block", "kyc update",
+    "crypto double", "investment double", "guaranteed return", "earn daily",
+    "work from home", "part time job", "click link earn", "free recharge",
+    "telegram premium free", "free gift", "gift card"
+}
+
+BAD_STICKER_EMOJIS = {"🍆", "🍑", "💦", "🍼", "🖕", "💊", "💉", "🚬", "🔞",
+                      "🩸", "👅", "👙", "🩲", "🧨", "💣", "🔫", "🖐️", "🍌"}
+
+BAD_STICKER_SET_KEYWORDS = {"nsfw", "porn", "sex", "xxx", "18plus", "18+",
+                            "nude", "adult", "gali", "abuse", "gaali", "hot"}
+
+REPORT_TRIGGERS = {"report", "rpt", "complaint", "admin", "@admin",
+                   "report him", "report her", "mods", "moderator"}
+
+# ============================================================
+# LANGUAGE
+# ============================================================
 LANGS = {
     "en": {
         "denied": "🚫 <b>Access Denied!</b> You Don't Have Enough Permissions.",
         "owner_respect": "👑 <b>Yes, Boss!</b> Executing your command. ⚡\n\n",
+        "owner_protection": "👑 <b>Owner Protected!</b> Cannot perform this action on the boss.",
         "user_not_found": "❌ <b>Target Not Found!</b> Reply to a user.",
         "banned": "🔨 <b>BANNED!</b> {} has been removed. 🚫",
         "kicked": "👢 <b>KICKED!</b> {} has been removed. 🚪",
@@ -78,6 +128,7 @@ LANGS = {
     "hi": {
         "denied": "🚫 <b>Permission Nahi Hai!</b>",
         "owner_respect": "👑 <b>Ji Huzoor!</b> Aapka hukum sar aankhon par. ⚡\n\n",
+        "owner_protection": "👑 <b>Owner Protected!</b> Boss ke saath aisa nahi kar sakte.",
         "user_not_found": "❌ <b>Target Nahi Mila!</b> Kisi message ko reply karein.",
         "banned": "🔨 <b>BANNED!</b> {} ko nikal diya gaya. 🚫",
         "kicked": "👢 <b>KICKED!</b> {} ko nikal diya gaya. 🚪",
@@ -93,7 +144,9 @@ def get_lang(chat_id):
     data = settings_col.find_one({"chat_id": chat_id})
     return data.get("lang", "en") if data else "en"
 
-# --- Helpers ---
+# ============================================================
+# HELPERS
+# ============================================================
 async def get_user_level(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id == OWNER_ID: return 99
@@ -150,7 +203,9 @@ def fetch_gif(action):
     except: pass
     return None
 
-# --- Economy Helpers ---
+# ============================================================
+# ECONOMY HELPERS
+# ============================================================
 def get_user_bal(user_id):
     if user_id == OWNER_ID: return "♾️ Unlimited"
     user = users_col.find_one({"user_id": user_id})
@@ -163,14 +218,102 @@ def update_user_bal(user_id, amount):
     if user_id == OWNER_ID and amount < 0: return 
     users_col.update_one({"user_id": user_id}, {"$inc": {"balance": amount}}, upsert=True)
 
-# --- Keyboards ---
+# ============================================================
+# 🛡️ PROTECTION HELPERS (NEW)
+# ============================================================
+async def notify_admins(context, chat_id, text, notify_owner=True):
+    """DM all admins + owner with violation details."""
+    sent = 0
+    try:
+        admins = await context.bot.get_chat_administrators(chat_id)
+        for admin in admins:
+            if admin.user.is_bot: continue
+            try:
+                await context.bot.send_message(admin.user.id, text, parse_mode='HTML', disable_web_page_preview=True)
+                sent += 1
+            except: pass
+    except: pass
+    if notify_owner and OWNER_ID and OWNER_ID != 0:
+        try:
+            await context.bot.send_message(OWNER_ID, text, parse_mode='HTML', disable_web_page_preview=True)
+            sent += 1
+        except: pass
+    return sent
+
+def track_violation(chat_id, user_id, vtype):
+    """Increment violation counter and return new count."""
+    violations_col.update_one(
+        {"chat_id": chat_id, "user_id": user_id, "type": vtype},
+        {"$inc": {"count": 1}, "$set": {"last_at": datetime.utcnow()}},
+        upsert=True
+    )
+    doc = violations_col.find_one({"chat_id": chat_id, "user_id": user_id, "type": vtype})
+    return doc.get("count", 1) if doc else 1
+
+async def punish_violator(context, chat_id, user_id, user_first_name, count, reason):
+    """Apply escalating punishment: 1-2 warn, 3-4 mute 1h, 5+ ban."""
+    try:
+        if count >= 5:
+            await context.bot.ban_chat_member(chat_id, user_id)
+            await context.bot.send_message(
+                chat_id,
+                f"🔨 <b>{user_first_name}</b> banned after {count} violations ({reason}).",
+                parse_mode='HTML'
+            )
+        elif count >= 3:
+            await context.bot.restrict_chat_member(
+                chat_id=chat_id, user_id=user_id,
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=datetime.now() + timedelta(hours=1)
+            )
+            await context.bot.send_message(
+                chat_id,
+                f"🔇 <b>{user_first_name}</b> muted 1 hour ({count} violations: {reason}).",
+                parse_mode='HTML'
+            )
+        else:
+            await context.bot.send_message(
+                chat_id,
+                f"⚠️ <b>{user_first_name}</b>, {reason}! Warning {count}/5.",
+                parse_mode='HTML'
+            )
+    except: pass
+
+def is_abuse(text):
+    words = text.lower().split()
+    return any(w.strip(".,!?") in ABUSE_SHORTFORMS for w in words)
+
+def is_drug(text):
+    return any(kw in text.lower() for kw in DRUG_KEYWORDS)
+
+def is_nsfw(text):
+    return any(kw in text.lower() for kw in NSFW_KEYWORDS)
+
+def is_scam(text):
+    return any(kw in text.lower() for kw in SCAM_KEYWORDS)
+
+def check_sticker_violation(sticker):
+    """Returns reason string if bad, else None."""
+    db_check = bad_stickers_col.find_one({"file_unique_id": sticker.file_unique_id})
+    if db_check: return "🚫 Blacklisted sticker"
+    if sticker.emoji and sticker.emoji in BAD_STICKER_EMOJIS:
+        return f"🚫 Inappropriate emoji ({sticker.emoji})"
+    set_name = (sticker.set_name or "").lower()
+    if any(kw in set_name for kw in BAD_STICKER_SET_KEYWORDS):
+        return "🚫 NSFW/Abuse sticker pack"
+    return None
+
+# ============================================================
+# KEYBOARDS
+# ============================================================
 def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add Me To Your Group", url="https://t.me/aegis_manager_bot?startgroup=true")],
         [InlineKeyboardButton("🛡️ Moderation", callback_data="m_mod"), InlineKeyboardButton("🎮 Fun & Games", callback_data="m_fun")],
         [InlineKeyboardButton("👑 Admin Levels", callback_data="m_admin"), InlineKeyboardButton("💰 Economy", callback_data="m_eco")],
         [InlineKeyboardButton("📝 Notes", callback_data="m_notes"), InlineKeyboardButton("🚫 Blacklist", callback_data="m_badwords")],
-        [InlineKeyboardButton("🔒 Locks", callback_data="m_lock"), InlineKeyboardButton("🌐 Language", callback_data="m_lang")]
+        [InlineKeyboardButton("🔒 Locks", callback_data="m_lock"), InlineKeyboardButton("🌐 Language", callback_data="m_lang")],
+        [InlineKeyboardButton("🛡️ Protection System", callback_data="m_protect")]
     ])
 
 def mod_menu():
@@ -207,7 +350,17 @@ def eco_menu():
         [InlineKeyboardButton("🔙 Back", callback_data="m_main")]
     ])
 
-# --- Callback Handlers ---
+def protection_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚫 Stickers", callback_data="prot_sticker"), InlineKeyboardButton("💊 Drugs", callback_data="prot_drug")],
+        [InlineKeyboardButton("🔞 NSFW", callback_data="prot_nsfw"), InlineKeyboardButton("💸 Scam", callback_data="prot_scam")],
+        [InlineKeyboardButton("✏️ Edits", callback_data="prot_edit"), InlineKeyboardButton("🌊 Flood", callback_data="prot_flood")],
+        [InlineKeyboardButton("🔙 Back", callback_data="m_main")]
+    ])
+
+# ============================================================
+# CALLBACK HANDLER
+# ============================================================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -227,6 +380,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "m_fun": await query.edit_message_text("🎮 <b>Fun & Games</b>", reply_markup=fun_menu(), parse_mode='HTML')
     elif data == "m_shayari": await query.edit_message_text("🖋️ <b>Shayari Menu</b>", reply_markup=shayari_menu(), parse_mode='HTML')
     elif data == "m_eco": await query.edit_message_text("💰 <b>Economy</b>", reply_markup=eco_menu(), parse_mode='HTML')
+    elif data == "m_protect": await query.edit_message_text(
+        "🛡️ <b>Protection System</b>\n\nBot automatically deletes:\n• NSFW/Abuse stickers\n• Drug/illegal text\n• NSFW text\n• Scam messages\n• Edited messages\n• Flood spam\n\nUse <code>/protection</code> for status.",
+        reply_markup=protection_menu(), parse_mode='HTML'
+    )
+    elif data.startswith("prot_"):
+        await query.edit_message_text(
+            f"ℹ️ <b>Protection Info</b>\n\nType <code>/protection</code> to see full status.\nViolations auto-escalate: warn → mute 1h → ban.",
+            reply_markup=protection_menu(), parse_mode='HTML'
+        )
     elif data == "m_trace":
         await query.edit_message_text("🏃 <b>Word Trace Game</b>\n\nType <code>/trace</code> to start!", parse_mode='HTML', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_fun")]]))
     elif data == "m_admin":
@@ -275,18 +437,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_ttt": await query.edit_message_text("Type: <code>/ttt</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
     elif data == "cmd_top": await query.edit_message_text("Type: <code>/top</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m_eco")]]), parse_mode='HTML')
 
-    # RPS Games
     elif data.startswith("rps_"):
         parts = data.split("_")
         user_choice = parts[1]
         bet = int(parts[2])
         bal = get_user_bal(user_id)
-        
         if bal != "♾️ Unlimited" and bal < bet:
             return await query.edit_message_text("❌ Insufficient Funds!")
-            
         bot_choice = random.choice(["rock", "paper", "scissors"])
-        
         if user_choice == bot_choice:
             result = "🤝 <b>TIE!</b> Money returned."
         elif (user_choice == "rock" and bot_choice == "scissors") or \
@@ -297,7 +455,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             update_user_bal(user_id, -bet)
             result = f"😭 <b>You Lost!</b> Lost ${bet}."
-            
         await query.edit_message_text(f"You: {user_choice.upper()} | Bot: {bot_choice.upper()}\n\n{result}", parse_mode='HTML')
 
     elif data.startswith("rpspvp_"):
@@ -306,17 +463,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bet = int(parts[2])
         p1_id = int(parts[3])
         p2_id = int(parts[4])
-        
         if query.from_user.id != p2_id:
             return await query.answer("This challenge is not for you!", show_alert=True)
-            
         if get_user_bal(p1_id) < bet or get_user_bal(p2_id) < bet:
             return await query.answer("One player lacks funds!", show_alert=True)
-            
         p1_choice = random.choice(["rock", "paper", "scissors"])
         p1_name = "Challenger"
         p2_name = query.from_user.first_name
-        
         if p1_choice == p2_choice:
             result = "🤝 <b>TIE!</b> Money returned."
         elif (p1_choice == "rock" and p2_choice == "scissors") or \
@@ -329,7 +482,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update_user_bal(p1_id, -bet)
             update_user_bal(p2_id, bet)
             result = f"🎉 <b>You Won!</b>\nChoice: {p1_choice.upper()}\nEarned ${bet}."
-            
         await query.edit_message_text(f"⚔️ <b>PvP Result</b>\n\n{p2_name}: {p2_choice.upper()}\n{p1_name}: {p1_choice.upper()}\n\n{result}", parse_mode='HTML')
 
     elif data.startswith("ttt_"):
@@ -340,12 +492,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if board[idx] != "⬜": return await query.answer("Spot taken!", show_alert=True)
         board[idx] = "❌"
         ttt_games[chat_id] = (board, "O")
-        
         if check_win(board, "❌"):
             del ttt_games[chat_id]
             update_user_bal(user_id, 200)
             return await query.edit_message_text(f"🎉 <b>You beat the Bot!</b> Reward: $200", parse_mode='HTML')
-            
         empty_spots = [i for i, val in enumerate(board) if val == "⬜"]
         if empty_spots:
             bot_idx = random.choice(empty_spots)
@@ -376,13 +526,16 @@ def generate_ttt_board(board):
         ])
     return InlineKeyboardMarkup(keyboard)
 
-# --- Core Commands ---
+# ============================================================
+# CORE COMMANDS
+# ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chats_col.update_one({"chat_id": update.effective_chat.id}, {"$set": {"chat_id": update.effective_chat.id}}, upsert=True)
     text = (
         "⚡ <b>Aegis Premium Panel</b> ⚡\n\n"
         "👑 <b>System Developer:</b> <code>Aman</code>\n"
-        "🔥 <i>The Ultimate Architecture</i>\n\n"
+        "🔥 <i>The Ultimate Architecture</i>\n"
+        "🛡️ <i>Advanced Protection Enabled</i>\n\n"
         "👇 Select a category below:"
     )
     await update.message.reply_text(text, reply_markup=main_menu(), parse_mode='HTML')
@@ -394,7 +547,6 @@ async def set_lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings_col.update_one({"chat_id": update.effective_chat.id}, {"$set": {"lang": lang}}, upsert=True)
     await update.message.reply_text(LANGS[lang]["lang_changed"], parse_mode='HTML')
 
-# --- Approval System ---
 async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await get_user_level(update, context) < 2: return await update.message.reply_text("🚫 Admin Only.")
     target = await get_target(update, context)
@@ -402,10 +554,13 @@ async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     approved_col.update_one({"chat_id": update.effective_chat.id, "user_id": target.id}, {"$set": {"user_id": target.id}}, upsert=True)
     await update.message.reply_text(f"✅ {target.first_name} is now Approved. They won't be auto-muted for abuse (but will be warned).")
 
-# --- Trace Game ---
+# ============================================================
+# GAMES
+# ============================================================
 async def trace_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in trace_games: return await update.message.reply_text("❌ A game is already running!")
+    if not TRACE_WORDS: return await update.message.reply_text("❌ No trace words available in data.")
     word = random.choice(TRACE_WORDS)
     word_list = list(word)
     random.shuffle(word_list)
@@ -418,10 +573,10 @@ async def trace_timeout(context: ContextTypes.DEFAULT_TYPE):
         del trace_games[context.job.chat_id]
         await context.bot.send_message(context.job.chat_id, "⏰ <b>Time Over!</b>", parse_mode='HTML')
 
-# --- Trivia Game ---
 async def trivia_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in trivia_games: return await update.message.reply_text("❌ Trivia is already running!")
+    if not TRIVIA_QUESTIONS: return await update.message.reply_text("❌ No trivia questions available.")
     q_data = random.choice(TRIVIA_QUESTIONS)
     trivia_games[chat_id] = q_data["a"]
     await update.message.reply_text(f"🧠 <b>TRIVIA!</b>\n\nQuestion: {q_data['q']}\n\nFirst correct answer gets <b>$100</b>! (30s)", parse_mode='HTML')
@@ -432,19 +587,21 @@ async def trivia_timeout(context: ContextTypes.DEFAULT_TYPE):
         del trivia_games[context.job.chat_id]
         await context.bot.send_message(context.job.chat_id, "⏰ <b>Time Over!</b> No one answered.", parse_mode='HTML')
 
-# --- Spinner ---
 async def spin_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admins = await context.bot.get_chat_administrators(update.effective_chat.id)
-    members = [a.user for a in admins if not a.user.is_bot] # Simplified for demo
+    members = [a.user for a in admins if not a.user.is_bot]
     if not members: return await update.message.reply_text("Could not find members to spin.")
     chosen = random.choice(members)
     await update.message.reply_text(f"🎡 <b>Spinning the wheel...</b>\n\n🎯 The chosen one is: [{chosen.first_name}](tg://user?id={chosen.id})", parse_mode='Markdown')
 
-# --- Owner Panel ---
+# ============================================================
+# OWNER
+# ============================================================
 async def owner_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return await update.message.reply_text("🚫 Owner Only!")
     total_chats = chats_col.count_documents({})
-    text = f"👑 <b>Welcome Boss</b> 👑\n\n📊 <b>Total Groups:</b> {total_chats}\n💰 <b>Balance:</b> ♾️ Unlimited\n⚡ <b>Status:</b> God Mode Active\n\n<b>Commands:</b>\n<code>/broadcast &lt;msg&gt;</code>\n<code>/gban (reply)</code>"
+    total_reports = reports_log_col.count_documents({})
+    text = f"👑 <b>Welcome Boss</b> 👑\n\n📊 <b>Groups:</b> {total_chats}\n📨 <b>Reports Logged:</b> {total_reports}\n💰 <b>Balance:</b> ♾️ Unlimited\n⚡ <b>Status:</b> God Mode Active\n\n<b>Commands:</b>\n<code>/broadcast &lt;msg&gt;</code>\n<code>/gban (reply)</code>\n<code>/reports</code>"
     await update.message.reply_text(text, parse_mode='HTML')
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -465,6 +622,7 @@ async def gban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     target = await get_target(update, context)
     if not target: return await update.message.reply_text("Reply to a user to GBAN.")
+    if target.id == OWNER_ID: return await update.message.reply_text("🚫 Cannot gban yourself!")
     reason = " ".join(context.args) if context.args else "No reason provided"
     gbans_col.insert_one({"user_id": target.id, "reason": reason})
     chats = chats_col.find()
@@ -473,7 +631,9 @@ async def gban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
     await update.message.reply_text(f"🔨 <b>GBANNED!</b> {target.first_name}\nReason: {reason}", parse_mode='HTML')
 
-# --- Economy & Betting ---
+# ============================================================
+# ECONOMY
+# ============================================================
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = update.message.reply_to_message.from_user if update.message.reply_to_message else update.effective_user
     bal = get_user_bal(target.id)
@@ -504,19 +664,17 @@ async def rob_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not target or not context.args: return await update.message.reply_text("Reply with `/rob <amount>`")
     try: amount = int(context.args[-1])
     except: return await update.message.reply_text("Invalid amount.")
-    
     if target.id == update.effective_user.id: return await update.message.reply_text("You cannot rob yourself!")
-    if get_user_bal(update.effective_user.id) < amount: return await update.message.reply_text("❌ You need more money to risk.")
+    if update.effective_user.id != OWNER_ID and get_user_bal(update.effective_user.id) < amount: return await update.message.reply_text("❌ You need more money to risk.")
     if get_user_bal(target.id) < amount: return await update.message.reply_text("😂 Target doesn't have that much!")
-
     success = random.choice([True, False])
     if success:
-        gif = random.choice(ROB_GIFS_SUCCESS)
+        gif = random.choice(ROB_GIFS_SUCCESS) if ROB_GIFS_SUCCESS else (fetch_gif("happy") or "https://media.tenor.com/B8J4vI8q4AAAAAC/thor-hammer.gif")
         update_user_bal(target.id, -amount)
         update_user_bal(update.effective_user.id, amount)
         caption = f"🕵️‍♂️ <b>ROBBED!</b> {update.effective_user.first_name} stole ${amount} from {target.first_name}!"
     else:
-        gif = random.choice(ROB_GIFS_FAIL)
+        gif = random.choice(ROB_GIFS_FAIL) if ROB_GIFS_FAIL else (fetch_gif("cry") or "https://media.tenor.com/M8J4vI8q4AAAAAC/shut-up.gif")
         update_user_bal(update.effective_user.id, -amount)
         update_user_bal(target.id, amount)
         caption = f"🚨 <b>CAUGHT!</b> {update.effective_user.first_name} failed and paid ${amount} fine!"
@@ -526,8 +684,7 @@ async def kill_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = await get_target(update, context)
     if not target: return await update.message.reply_text("Reply to kill.")
     if target.id == update.effective_user.id: return await update.message.reply_text("Suicide not allowed!")
-    if get_user_bal(update.effective_user.id) < 50: return await update.message.reply_text("❌ Need $50.")
-    
+    if update.effective_user.id != OWNER_ID and get_user_bal(update.effective_user.id) < 50: return await update.message.reply_text("❌ Need $50.")
     update_user_bal(update.effective_user.id, -50)
     success = random.choice([True, False])
     if success:
@@ -539,13 +696,43 @@ async def kill_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = f"😂 <b>MISSED!</b> Attack failed! Lost $50."
     await update.message.reply_animation(animation=gif, caption=caption, parse_mode='HTML')
 
+async def bet_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not context.args:
+        return await update.message.reply_text(
+            "🎲 <b>Dice Bet</b>\n\nUsage: <code>/bet 100</code> or <code>/bet 100 dice</code>\nEmojis: 🎲 dice, 🎯 dart, 🏀 basketball, 🎳 bowling, ⚽ football, 🎰 slot\n\nWin rule: 4+ = win 2x.",
+            parse_mode='HTML'
+        )
+    try: amount = int(context.args[0])
+    except (ValueError, IndexError): return await update.message.reply_text("❌ Invalid amount! Usage: <code>/bet 100</code>", parse_mode='HTML')
+    if amount <= 0: return await update.message.reply_text("❌ Amount must be > 0!")
+    emoji = "🎲"
+    if len(context.args) > 1:
+        choice_map = {"dice": "🎲", "dart": "🎯", "basket": "🏀", "basketball": "🏀", "bowling": "🎳", "football": "⚽", "soccer": "⚽", "slot": "🎰", "slotmachine": "🎰"}
+        emoji = choice_map.get(context.args[1].lower(), "🎲")
+    bal = get_user_bal(user_id)
+    if bal != "♾️ Unlimited" and bal < amount:
+        return await update.message.reply_text(f"❌ <b>Insufficient funds!</b> Balance: <b>{bal}</b>", parse_mode='HTML')
+    dice_msg = await update.message.reply_dice(emoji=emoji)
+    value = dice_msg.dice.value
+    if emoji == "🎰":
+        if value >= 43:
+            update_user_bal(user_id, amount); result = f"🎉 <b>JACKPOT!</b> Slot: {value}\nWon <b>${amount}</b>!"
+        else:
+            update_user_bal(user_id, -amount); result = f"😭 <b>No luck!</b> Slot: {value}\nLost <b>${amount}</b>."
+    else:
+        if value >= 4:
+            update_user_bal(user_id, amount); result = f"🎉 <b>You Won!</b> Rolled <b>{value}</b> (4+).\nEarned <b>${amount}</b>!"
+        else:
+            update_user_bal(user_id, -amount); result = f"😭 <b>You Lost!</b> Rolled <b>{value}</b> (needed 4+).\nLost <b>${amount}</b>."
+    await update.message.reply_text(result, parse_mode='HTML')
+
 async def rps_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args: return await update.message.reply_text("Usage: `/rps 100`")
     try: bet = int(context.args[-1])
     except: return await update.message.reply_text("Invalid amount.")
     challenger = update.effective_user
     opponent = update.message.reply_to_message.from_user if update.message.reply_to_message else None
-    
     if opponent and opponent.id != challenger.id:
         if update.effective_user.id != OWNER_ID and get_user_bal(challenger.id) < bet: return await update.message.reply_text("❌ Insufficient funds!")
         markup = InlineKeyboardMarkup([
@@ -576,7 +763,9 @@ async def top_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"{i}. {name} - ${user['balance']}\n"
     await update.message.reply_text(text, parse_mode='HTML')
 
-# --- Moderation Commands ---
+# ============================================================
+# MODERATION
+# ============================================================
 async def pin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_chat.id)
     if await get_user_level(update, context) < 2: return await update.message.reply_text(LANGS[lang]["denied"], parse_mode='HTML')
@@ -605,7 +794,9 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.ban_chat_member(update.effective_chat.id, target.id)
         prefix = LANGS[lang]["owner_respect"] if await get_user_level(update, context) == 99 else ""
         caption = f"{prefix}{LANGS[lang]['banned'].format(target.first_name)}"
-        await update.message.reply_animation(animation=random.choice(BAN_GIFS), caption=caption, parse_mode='HTML')
+        gif = random.choice(BAN_GIFS) if BAN_GIFS else fetch_gif("slap")
+        if gif: await update.message.reply_animation(animation=gif, caption=caption, parse_mode='HTML')
+        else: await update.message.reply_text(caption, parse_mode='HTML')
     except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -626,7 +817,10 @@ async def kick_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.ban_chat_member(update.effective_chat.id, target.id)
         await context.bot.unban_chat_member(update.effective_chat.id, target.id)
-        await update.message.reply_animation(animation=random.choice(BAN_GIFS), caption=LANGS[lang]['kicked'].format(target.first_name), parse_mode='HTML')
+        gif = random.choice(BAN_GIFS) if BAN_GIFS else fetch_gif("slap")
+        caption = LANGS[lang]['kicked'].format(target.first_name)
+        if gif: await update.message.reply_animation(animation=gif, caption=caption, parse_mode='HTML')
+        else: await update.message.reply_text(caption, parse_mode='HTML')
     except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -636,7 +830,10 @@ async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not target: return await update.message.reply_text(LANGS[lang]["user_not_found"], parse_mode='HTML')
     try:
         await context.bot.restrict_chat_member(update.effective_chat.id, target.id, ChatPermissions(can_send_messages=False))
-        await update.message.reply_animation(animation=random.choice(MUTE_GIFS), caption=LANGS[lang]['muted'].format(target.first_name), parse_mode='HTML')
+        gif = random.choice(MUTE_GIFS) if MUTE_GIFS else (fetch_gif("shh") or fetch_gif("slap"))
+        caption = LANGS[lang]['muted'].format(target.first_name)
+        if gif: await update.message.reply_animation(animation=gif, caption=caption, parse_mode='HTML')
+        else: await update.message.reply_text(caption, parse_mode='HTML')
     except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
 async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -669,16 +866,16 @@ async def warn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not target: return await update.message.reply_text(LANGS[lang]["user_not_found"], parse_mode='HTML')
     if target.id == OWNER_ID: return await update.message.reply_text(LANGS[lang]["owner_protection"], parse_mode='HTML')
     chat_id, user_id = update.effective_chat.id, target.id
-    data = warnings_col.find_one({"chat_id": chat_id, "user_id": user_id})
+    data = warnings_col.find_one({"chat_id": chat_id, "user_id": user_id, "type": "manual"})
     new_count = (data.get("count", 0) + 1) if data else 1
     if data: warnings_col.update_one({"_id": data["_id"]}, {"$set": {"count": new_count}})
-    else: warnings_col.insert_one({"chat_id": chat_id, "user_id": user_id, "count": new_count})
+    else: warnings_col.insert_one({"chat_id": chat_id, "user_id": user_id, "count": new_count, "type": "manual"})
     await update.message.reply_text(f"⚠️ {target.first_name} warned! ({new_count}/3)", parse_mode='HTML')
     if new_count >= 3:
         try:
             await context.bot.ban_chat_member(chat_id, user_id)
             await update.message.reply_text(f"💀 {target.first_name} banned for 3 warnings!", parse_mode='HTML')
-            warnings_col.delete_one({"chat_id": chat_id, "user_id": user_id})
+            warnings_col.delete_one({"chat_id": chat_id, "user_id": user_id, "type": "manual"})
         except: pass
 
 async def promote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -705,7 +902,6 @@ async def demote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"📉 {target.first_name} demoted!", parse_mode='HTML')
     except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
 
-# --- Locks ---
 async def lock_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await get_user_level(update, context) < 2: return
     try:
@@ -730,7 +926,9 @@ async def unlock_stickers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings_col.update_one({"chat_id": update.effective_chat.id}, {"$set": {"stickers_locked": False}}, upsert=True)
     await update.message.reply_text("🔓 Stickers Unlocked!")
 
-# --- Fun, Desi, Action & Games Commands ---
+# ============================================================
+# FUN & DESI
+# ============================================================
 async def action_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, action_name):
     if not update.message.reply_to_message: return await update.message.reply_text(f"Reply to someone with /{action_name}")
     target = update.message.reply_to_message.from_user
@@ -765,25 +963,25 @@ async def kamra_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): await a
 
 async def truth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
-    truth = random.choice(TRUTHS)
+    truth = random.choice(TRUTHS) if TRUTHS else "Truth list empty!"
     if target: await update.message.reply_text(f"🎯 <b>Truth for {target.first_name}:</b>\n\n{truth}", parse_mode='HTML')
     else: await update.message.reply_text(f"🎯 <b>Truth:</b>\n\n{truth}", parse_mode='HTML')
 
 async def dare_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
-    dare = random.choice(DARES)
+    dare = random.choice(DARES) if DARES else "Dare list empty!"
     if target: await update.message.reply_text(f"🔥 <b>Dare for {target.first_name}:</b>\n\n{dare}", parse_mode='HTML')
     else: await update.message.reply_text(f"🔥 <b>Dare:</b>\n\n{dare}", parse_mode='HTML')
 
 async def rizz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
-    rizz = random.choice(RIZZ)
+    rizz = random.choice(RIZZ) if RIZZ else "Rizz list empty!"
     if target: await update.message.reply_text(f"💘 {update.effective_user.first_name} to {target.first_name}:\n\n<i>{rizz}</i>", parse_mode='HTML')
     else: await update.message.reply_text(f"💘 <i>{rizz}</i>", parse_mode='HTML')
 
 async def roast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = update.message.reply_to_message.from_user if update.message.reply_to_message else None
-    roast = random.choice(ROASTS)
+    roast = random.choice(ROASTS) if ROASTS else "Roast list empty!"
     if target: await update.message.reply_text(f"😂 <b>{target.first_name}</b>, {roast}", parse_mode='HTML')
     else: await update.message.reply_text(f"😂 {roast}", parse_mode='HTML')
 
@@ -797,7 +995,9 @@ async def roll_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def shayari_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🖋️ <b>Shayari Menu</b>", reply_markup=shayari_menu(), parse_mode='HTML')
 
-# --- Protection & Message Handlers ---
+# ============================================================
+# 🛡️ PROTECTION HANDLERS (NEW)
+# ============================================================
 async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = settings_col.find_one({"chat_id": update.effective_chat.id})
     for member in update.message.new_chat_members:
@@ -806,10 +1006,39 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(welcome)
 
 async def handle_edited_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete edited messages and report to admins."""
     if not update.edited_message: return
+    chat = update.effective_chat or update.edited_chat
+    if not chat: return
+    
+    # Admins exempt
     try:
-        await update.edited_message.delete()
-        await context.bot.send_message(update.effective_chat.id, f"⚠️ {update.edited_message.from_user.first_name}, editing messages is not allowed!", parse_mode='HTML')
+        if await get_user_level(update, context) >= 2: return
+    except: pass
+    
+    try: await update.edited_message.delete()
+    except: pass
+    
+    chat_title = chat.title or chat.username or str(chat.id)
+    user = update.edited_message.from_user
+    new_text = (update.edited_message.text or update.edited_message.caption or "(media)")[:300]
+    
+    admin_msg = (
+        f"🚨 <b>MESSAGE EDITED & DELETED</b> 🚨\n\n"
+        f"👤 <b>User:</b> {user.first_name}\n"
+        f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
+        f"💬 <b>Group:</b> {chat_title}\n"
+        f"📝 <b>New content:</b> <code>{new_text}</code>\n\n"
+        f"⚡ <i>Edited messages not allowed in this group.</i>"
+    )
+    await notify_admins(context, chat.id, admin_msg, notify_owner=False)
+    
+    try:
+        await context.bot.send_message(
+            chat.id,
+            f"⚠️ {user.first_name}, editing messages is not allowed! Admins notified.",
+            parse_mode='HTML'
+        )
     except: pass
 
 async def handle_gc_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -823,100 +1052,306 @@ async def handle_gc_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: pass
 
 async def report_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enhanced /report command - shows WHO reported WHOM."""
     if not update.message.reply_to_message: return await update.message.reply_text("Reply to a user to report.")
     target = update.message.reply_to_message.from_user
-    reporter = update.effective_user.first_name
+    reporter = update.effective_user
+    chat = update.effective_chat
+    chat_title = chat.title or chat.username or str(chat.id)
+    reported_text = (update.message.reply_to_message.text or update.message.reply_to_message.caption or "(media)")[:300]
     
-    admins = await context.bot.get_chat_administrators(update.effective_chat.id)
-    admin_tags = " ".join([f"[{a.user.first_name}](tg://user?id={a.user.id})" for a in admins if not a.user.is_bot])
-    
-    await update.message.reply_text(f"🚨 <b>REPORT ALERT!</b> 🚨\n\n{reporter} reported {target.first_name}.\n\n{admin_tags} please check!", parse_mode='Markdown')
+    report_msg = (
+        f"🚨 <b>NEW REPORT!</b> 🚨\n\n"
+        f"📢 <b>Reporter:</b> {reporter.first_name} (<code>{reporter.id}</code>)\n"
+        f"👤 <b>Reported:</b> {target.first_name} (<code>{target.id}</code>)\n"
+        f"💬 <b>Group:</b> {chat_title}\n"
+        f"📝 <b>Message:</b> <code>{reported_text}</code>\n\n"
+        f"⚡ <i>Admins, please review!</i>"
+    )
+    await notify_admins(context, chat.id, report_msg, notify_owner=True)
+    reports_log_col.insert_one({
+        "chat_id": chat.id, "reporter_id": reporter.id, "target_id": target.id,
+        "target_name": target.first_name, "reporter_name": reporter.first_name,
+        "message": reported_text, "timestamp": datetime.utcnow()
+    })
+    await update.message.reply_text(
+        f"✅ Report submitted! Admins have been notified about <b>{target.first_name}</b>.",
+        parse_mode='HTML'
+    )
 
 async def handle_stickers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🛡️ HIGH PRIORITY: Detect and punish bad stickers."""
+    if not update.message or not update.message.sticker: return
     chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    user = update.effective_user
+    
+    # Admins exempt
+    if await get_user_level(update, context) >= 1: return
+    
+    sticker = update.message.sticker
+    reason = check_sticker_violation(sticker)
+    
+    # Check stickers-locked setting
     data = settings_col.find_one({"chat_id": chat_id})
-    if data and data.get("stickers_locked", False):
-        if await get_user_level(update, context) < 1:
-            try:
-                await update.message.delete()
-                await update.message.reply_text("🔒 Stickers Locked!")
-            except: pass
+    locked = data and data.get("stickers_locked", False)
+    
+    if not reason and locked:
+        reason = "🔒 Stickers locked in this group"
+    
+    if not reason: return  # Sticker is clean
+    
+    # Delete sticker
+    try: await update.message.delete()
+    except: pass
+    
+    # Track & punish
+    count = track_violation(chat_id, user_id, "sticker")
+    await punish_violator(context, chat_id, user_id, user.first_name, count, reason)
+    
+    # Notify admins
+    chat_title = update.effective_chat.title or update.effective_chat.username or str(chat_id)
+    admin_msg = (
+        f"🚨 <b>STICKER VIOLATION</b> 🚨\n\n"
+        f"👤 <b>User:</b> {user.first_name} (<code>{user_id}</code>)\n"
+        f"💬 <b>Group:</b> {chat_title}\n"
+        f"⚠️ <b>Reason:</b> {reason}\n"
+        f"🎨 <b>Emoji:</b> {sticker.emoji or 'N/A'}\n"
+        f"📦 <b>Pack:</b> {sticker.set_name or 'N/A'}\n"
+        f"📊 <b>Violations:</b> {count}/5\n"
+        f"🔖 <b>Sticker ID:</b> <code>{sticker.file_unique_id}</code>"
+    )
+    await notify_admins(context, chat_id, admin_msg, notify_owner=False)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🛡️ HIGH PRIORITY: Full protection pipeline, then games, then chatting."""
     if not update.message or not update.message.text: return
-    chat_id, user_id = update.effective_chat.id, update.effective_user.id
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    user = update.effective_user
     text_upper = update.message.text.upper()
     text_lower = update.message.text.lower()
-
-    # GBAN Check
+    text_raw = update.message.text
+    chat_title = update.effective_chat.title or update.effective_chat.username or str(chat_id)
+    
+    # ========== 1. GBAN CHECK (highest priority) ==========
     gban_data = gbans_col.find_one({"user_id": user_id})
     if gban_data:
         try:
             await update.message.delete()
-            await update.message.reply_text(f"⚠️ This user was banned by Aman bhai. Reason: {gban_data['reason']}", parse_mode='HTML')
+            await context.bot.send_message(chat_id, f"⚠️ This user was banned globally. Reason: {gban_data['reason']}", parse_mode='HTML')
             return
         except: pass
-
-    # Trace Game Check
-    if chat_id in trace_games:
-        if text_upper == trace_games[chat_id]:
+    
+    # ========== 2. REPORT DETECTION (reply with report word) ==========
+    if update.message.reply_to_message and not update.message.reply_to_message.from_user.is_bot:
+        stripped = text_lower.strip()
+        is_report = (
+            stripped in REPORT_TRIGGERS or
+            any(stripped.startswith(t + " ") for t in ["report", "rpt"]) or
+            "@admin" in stripped
+        )
+        if is_report:
+            target = update.message.reply_to_message.from_user
+            reported_text = (update.message.reply_to_message.text or update.message.reply_to_message.caption or "(media)")[:300]
+            report_msg = (
+                f"🚨 <b>REPORT DETECTED!</b> 🚨\n\n"
+                f"📢 <b>Reporter:</b> {user.first_name} (<code>{user_id}</code>)\n"
+                f"👤 <b>Reported:</b> {target.first_name} (<code>{target.id}</code>)\n"
+                f"💬 <b>Group:</b> {chat_title}\n"
+                f"📝 <b>Message:</b> <code>{reported_text}</code>\n\n"
+                f"⚡ <i>Admins, review!</i>"
+            )
+            await notify_admins(context, chat_id, report_msg, notify_owner=True)
+            reports_log_col.insert_one({
+                "chat_id": chat_id, "reporter_id": user_id, "target_id": target.id,
+                "target_name": target.first_name, "reporter_name": user.first_name,
+                "message": reported_text, "timestamp": datetime.utcnow()
+            })
+            try:
+                await update.message.reply_text(
+                    f"✅ Report registered! Admins notified about <b>{target.first_name}</b>.",
+                    parse_mode='HTML'
+                )
+            except: pass
+            return
+    
+    # ========== 3. GAME ANSWERS (before protection to avoid false positives) ==========
+    is_game_answer = False
+    if chat_id in trace_games and text_upper == trace_games[chat_id]: is_game_answer = True
+    if chat_id in trivia_games and text_lower == trivia_games[chat_id]: is_game_answer = True
+    
+    if is_game_answer:
+        if chat_id in trace_games and text_upper == trace_games[chat_id]:
             del trace_games[chat_id]
             update_user_bal(user_id, 200)
-            return await update.message.reply_text(f"🎉 <b>CORRECT!</b> {update.effective_user.first_name} won $200!", parse_mode='HTML')
-
-    # Trivia Game Check
-    if chat_id in trivia_games:
-        if text_lower == trivia_games[chat_id]:
+            return await update.message.reply_text(f"🎉 <b>CORRECT!</b> {user.first_name} won $200!", parse_mode='HTML')
+        if chat_id in trivia_games and text_lower == trivia_games[chat_id]:
             del trivia_games[chat_id]
             update_user_bal(user_id, 100)
-            return await update.message.reply_text(f"🎉 <b>CORRECT!</b> {update.effective_user.first_name} won $100!", parse_mode='HTML')
-
-    # Auto Reactions
-    try:
-        if any(word in text_lower for word in ["haha", "lol", "😂"]): await update.message.set_reaction("😂")
-        elif any(word in text_lower for word in ["sad", "rona", "😭"]): await update.message.set_reaction("🥺")
-        elif any(word in text_lower for word in ["gali", "bc", "mc"]): await update.message.set_reaction("🤮")
-        elif any(word in text_lower for word in ["love", "pyar", "❤️"]): await update.message.set_reaction("❤️")
-        elif any(word in text_lower for word in ["gussa", "angry", "😡"]): await update.message.set_reaction("🤬")
-    except: pass
-
-    # Group Protection (Non-Admins only)
-    if await get_user_level(update, context) < 1:
+            return await update.message.reply_text(f"🎉 <b>CORRECT!</b> {user.first_name} won $100!", parse_mode='HTML')
+    
+    # ========== 4. PROTECTION FOR NON-ADMINS ==========
+    level = await get_user_level(update, context)
+    if level < 1:
+        # Anti-Drug
+        if is_drug(text_lower):
+            try: await update.message.delete()
+            except: pass
+            count = track_violation(chat_id, user_id, "drug")
+            await punish_violator(context, chat_id, user_id, user.first_name, count, "🚫 Drug/illegal content")
+            await notify_admins(context, chat_id,
+                f"💊 <b>DRUG VIOLATION</b> 💊\n\n👤 <b>User:</b> {user.first_name} (<code>{user_id}</code>)\n💬 <b>Group:</b> {chat_title}\n📝 <b>Text:</b> <code>{text_raw[:300]}</code>\n📊 <b>Strikes:</b> {count}/5",
+                notify_owner=True)
+            return
+        
+        # Anti-NSFW
+        if is_nsfw(text_lower):
+            try: await update.message.delete()
+            except: pass
+            count = track_violation(chat_id, user_id, "nsfw")
+            await punish_violator(context, chat_id, user_id, user.first_name, count, "🔞 NSFW content")
+            await notify_admins(context, chat_id,
+                f"🔞 <b>NSFW VIOLATION</b> 🔞\n\n👤 <b>User:</b> {user.first_name} (<code>{user_id}</code>)\n💬 <b>Group:</b> {chat_title}\n📝 <b>Text:</b> <code>{text_raw[:300]}</code>\n📊 <b>Strikes:</b> {count}/5",
+                notify_owner=True)
+            return
+        
+        # Anti-Scam
+        if is_scam(text_lower):
+            try: await update.message.delete()
+            except: pass
+            count = track_violation(chat_id, user_id, "scam")
+            await punish_violator(context, chat_id, user_id, user.first_name, count, "💸 Scam/phishing")
+            await notify_admins(context, chat_id,
+                f"💸 <b>SCAM DETECTED</b> 💸\n\n👤 <b>User:</b> {user.first_name} (<code>{user_id}</code>)\n💬 <b>Group:</b> {chat_title}\n📝 <b>Text:</b> <code>{text_raw[:300]}</code>\n📊 <b>Strikes:</b> {count}/5",
+                notify_owner=True)
+            return
+        
+        # Anti-Abuse (shortforms + DB badwords)
+        custom_badwords = list(badwords_col.find({"chat_id": chat_id}))
+        has_badword = any(bw['word'] in text_lower for bw in custom_badwords)
+        
+        if is_abuse(text_lower) or has_badword:
+            try: await update.message.delete()
+            except: pass
+            count = track_violation(chat_id, user_id, "abuse")
+            await punish_violator(context, chat_id, user_id, user.first_name, count, "🚫 Abusive language")
+            await notify_admins(context, chat_id,
+                f"🚫 <b>ABUSE DETECTED</b> 🚫\n\n👤 <b>User:</b> {user.first_name} (<code>{user_id}</code>)\n💬 <b>Group:</b> {chat_title}\n📝 <b>Text:</b> <code>{text_raw[:200]}</code>\n📊 <b>Strikes:</b> {count}/5",
+                notify_owner=False)
+            return
+        
         # Anti-Link
         if "http://" in text_lower or "https://" in text_lower or "t.me/" in text_lower:
             try:
                 await update.message.delete()
-                await update.message.reply_text(f"⚠️ {update.effective_user.first_name}, Links not allowed!")
+                await context.bot.send_message(chat_id, f"⚠️ {user.first_name}, links not allowed!", parse_mode='HTML')
                 return
             except: pass
-            
-        # Abusive Words (Check Approve List)
-        badwords = badwords_col.find({"chat_id": chat_id})
-        is_approved = approved_col.find_one({"chat_id": chat_id, "user_id": user_id})
         
-        # Basic Short-form abuse check
-        abusive_shortforms = ["bc", "mc", "bkl", "chutiya", "gandu", "madarchod", "bhenchod"]
-        if any(word in text_lower.split() for word in abusive_shortforms) or any(bw['word'] in text_lower for bw in badwords):
-            try:
-                await update.message.delete()
-                if is_approved:
-                    # Warn them
-                    warnings_col.insert_one({"chat_id": chat_id, "user_id": user_id, "count": 1, "reason": "Abuse after approval"})
-                    await update.message.reply_text(f"⚠️ {update.effective_user.first_name}, you are approved but abuse is not allowed. Warning issued.")
-                else:
-                    # Mute them
-                    await context.bot.restrict_chat_member(chat_id, user_id, ChatPermissions(can_send_messages=False))
-                    await update.message.reply_text(f"🔇 {update.effective_user.first_name}, muted for using abusive language.")
-                return
+        # Anti-Flood
+        now = time.time()
+        times = message_timestamps[user_id]
+        times = [t for t in times if now - t < 10]
+        times.append(now)
+        message_timestamps[user_id] = times
+        if len(times) >= 8:
+            try: await update.message.delete()
             except: pass
-
-    # Chatting Engine (New-Gen Words)
+            try:
+                await context.bot.restrict_chat_member(
+                    chat_id=chat_id, user_id=user_id,
+                    permissions=ChatPermissions(can_send_messages=False),
+                    until_date=datetime.now() + timedelta(minutes=5)
+                )
+                return await context.bot.send_message(chat_id, f"🔇 {user.first_name} muted 5min (flooding)", parse_mode='HTML')
+            except: return
+    
+    # ========== 5. AUTO REACTIONS ==========
+    try:
+        if any(w in text_lower for w in ["haha", "lol", "😂"]): await update.message.set_reaction("😂")
+        elif any(w in text_lower for w in ["sad", "rona", "😭"]): await update.message.set_reaction("🥺")
+        elif any(w in text_lower for w in ["gali", "bc", "mc"]): await update.message.set_reaction("🤮")
+        elif any(w in text_lower for w in ["love", "pyar", "❤️"]): await update.message.set_reaction("❤️")
+        elif any(w in text_lower for w in ["gussa", "angry", "😡"]): await update.message.set_reaction("🤬")
+    except: pass
+    
+    # ========== 6. CHATTING ENGINE ==========
     for trigger, replies in CHAT_DATA.items():
         if text_lower == trigger:
-            if random.random() < 0.4: # 40% chance
+            if random.random() < 0.4:
                 return await update.message.reply_text(random.choice(replies))
 
-# --- Main App ---
+# ============================================================
+# 🆕 NEW PROTECTION COMMANDS
+# ============================================================
+async def protection_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await get_user_level(update, context) < 1: return await update.message.reply_text("🚫 Admin Only.")
+    chat_id = update.effective_chat.id
+    sticker_count = bad_stickers_col.count_documents({})
+    text = (
+        "🛡️ <b>PROTECTION STATUS</b> 🛡️\n\n"
+        "✅ Anti-Sticker (NSFW/Abuse) — <b>Active</b>\n"
+        "✅ Anti-Drug Content — <b>Active</b>\n"
+        "✅ Anti-NSFW Text — <b>Active</b>\n"
+        "✅ Anti-Scam — <b>Active</b>\n"
+        "✅ Anti-Shortform-Gali — <b>Active</b>\n"
+        "✅ Anti-Edit (delete + report) — <b>Active</b>\n"
+        "✅ Anti-Link — <b>Active</b>\n"
+        "✅ Anti-Flood (8/10s) — <b>Active</b>\n"
+        "✅ Report Detection — <b>Active</b>\n\n"
+        f"📊 <b>Blacklisted Stickers:</b> {sticker_count}\n"
+        f"📝 <b>To blacklist new sticker:</b> Reply <code>/addbadsticker</code>\n\n"
+        "<b>Punishment Escalation:</b>\n"
+        "1-2 → ⚠️ Warn\n"
+        "3-4 → 🔇 Mute 1 hour\n"
+        "5+  → 🔨 Ban"
+    )
+    await update.message.reply_text(text, parse_mode='HTML')
+
+async def add_bad_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await get_user_level(update, context) < 2: return await update.message.reply_text("🚫 Admin Only.")
+    if not update.message.reply_to_message or not update.message.reply_to_message.sticker:
+        return await update.message.reply_text("Reply to a sticker with /addbadsticker")
+    sticker = update.message.reply_to_message.sticker
+    bad_stickers_col.update_one(
+        {"file_unique_id": sticker.file_unique_id},
+        {"$set": {"file_unique_id": sticker.file_unique_id, "file_id": sticker.file_id, "added_by": update.effective_user.id, "added_at": datetime.utcnow()}},
+        upsert=True
+    )
+    await update.message.reply_text(
+        f"✅ <b>Sticker blacklisted!</b>\n🔖 ID: <code>{sticker.file_unique_id}</code>\n\nBot will delete it everywhere now.",
+        parse_mode='HTML'
+    )
+
+async def del_bad_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await get_user_level(update, context) < 2: return await update.message.reply_text("🚫 Admin Only.")
+    if not update.message.reply_to_message or not update.message.reply_to_message.sticker:
+        return await update.message.reply_text("Reply to a sticker with /delbadsticker")
+    sticker = update.message.reply_to_message.sticker
+    result = bad_stickers_col.delete_one({"file_unique_id": sticker.file_unique_id})
+    if result.deleted_count:
+        await update.message.reply_text("✅ Sticker removed from blacklist.", parse_mode='HTML')
+    else:
+        await update.message.reply_text("⚠️ Sticker was not in blacklist.")
+
+async def view_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return await update.message.reply_text("🚫 Owner Only!")
+    reports = list(reports_log_col.find().sort("timestamp", -1).limit(20))
+    if not reports: return await update.message.reply_text("No reports yet.")
+    text = "🚨 <b>Recent Reports (Last 20)</b>\n\n"
+    for i, r in enumerate(reports, 1):
+        ts = r['timestamp'].strftime("%m-%d %H:%M") if r.get('timestamp') else "?"
+        text += f"{i}. <b>{r.get('reporter_name','?')}</b> → <b>{r.get('target_name','?')}</b> | {ts}\n   <i>{r.get('message','')[:80]}</i>\n\n"
+    await update.message.reply_text(text[:4000], parse_mode='HTML')
+
+async def toggle_antiflood(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await get_user_level(update, context) < 2: return await update.message.reply_text("🚫 Admin Only.")
+    await update.message.reply_text("✅ Anti-Flood is always active in this bot version. No toggle needed.", parse_mode='HTML')
+
+# ============================================================
+# MAIN
+# ============================================================
 async def post_init(application: Application) -> None:
     commands = [
         BotCommand("start", "Start Bot"), BotCommand("balance", "Check Money"), BotCommand("daily", "Claim Daily $500"),
@@ -925,7 +1360,9 @@ async def post_init(application: Application) -> None:
         BotCommand("top", "Leaderboard"), BotCommand("ban", "Ban"), BotCommand("kick", "Kick"), BotCommand("mute", "Mute"),
         BotCommand("t", "Truth"), BotCommand("d", "Dare"), BotCommand("roast", "Roast"), BotCommand("shayari", "Shayari Menu"),
         BotCommand("chappal", "Chappal Maaro"), BotCommand("bhai", "Bhai Wali Vibe"), BotCommand("approve", "Approve user"),
-        BotCommand("trivia", "Trivia Game"), BotCommand("spin", "Spin a member")
+        BotCommand("trivia", "Trivia Game"), BotCommand("spin", "Spin a member"),
+        BotCommand("protection", "Protection Status"), BotCommand("addbadsticker", "Blacklist sticker"),
+        BotCommand("report", "Report a user")
     ]
     await application.bot.set_my_commands(commands)
 
@@ -933,7 +1370,7 @@ def main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     app = Application.builder().token(token).post_init(post_init).build()
     
-    # Core Commands
+    # Core
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("setlang", set_lang_cmd))
@@ -942,6 +1379,13 @@ def main():
     app.add_handler(CommandHandler("gban", gban_user))
     app.add_handler(CommandHandler("approve", approve_user))
     app.add_handler(CommandHandler("report", report_system))
+    
+    # NEW Protection commands
+    app.add_handler(CommandHandler("protection", protection_status))
+    app.add_handler(CommandHandler("addbadsticker", add_bad_sticker))
+    app.add_handler(CommandHandler("delbadsticker", del_bad_sticker))
+    app.add_handler(CommandHandler("reports", view_reports))
+    app.add_handler(CommandHandler("antiflood", toggle_antiflood))
     
     # Economy
     app.add_handler(CommandHandler("balance", balance))
@@ -1010,7 +1454,7 @@ def main():
     app.add_handler(CommandHandler("dhoka", dhoka_cmd))
     app.add_handler(CommandHandler("kamra", kamra_cmd))
 
-    # Callbacks & Protections
+    # Protection handlers
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
     app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, handle_edited_message))
@@ -1018,7 +1462,7 @@ def main():
     app.add_handler(MessageHandler(filters.Sticker.ALL, handle_stickers))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    print("Aegis V18.5 Premium running...")
+    print("Aegis V19.0 PROTECTED running...")
     app.run_polling()
 
 if __name__ == '__main__':
