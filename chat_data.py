@@ -1,20 +1,19 @@
-# --- Aegis Massive Data (Har Category Me 50+ Lines) ---
+# --- Aegis Massive Data (Premium UI + Hinglish Fun) ---
 
 CHAT_DATA = {
-    "Gm": ["Good Morning Bhai! ☕ Aaj ka din tera hi hai.", "GM Bro! Chai peeke aana.", "Uth ja bhai, sooraj bhi tujhse jal raha hai. ☀️"],
-    "Gn": ["Good Night Bro! So ja ab. 🌙", "GN Bhai, kal milte hain.", "Meethe sapne, wale bhi tere jaise. 😴"],
-    "Kya h": ["Sab mast bhai! Tu bata kya scene hai?", "Ekdum first class. Bata kya chal raha hai?", "Kuch nahi yaar, bas group ki security kar raha hoon. 🛡️"],
-    "Bhai": ["Haan bhai, bol kya baat hai?", "Kya hua bhai? Koi dikkat?", "Bol jaldi, main busy hoon. 😎"],
-    "Bro": ["Haan bro, batao.", "Kya chal raha hai bro?", "Bro code yaad rakhna! 🤜🤛"],
-    "Lol": ["Hasi nai ruk rahi bc 😂", "Lol mat bol, sharam kar thodi.", "Meme bhejna tha na."],
-    "Bore": ["Bore ho raha hai? Jaakar gym kar ya kisi ki gaand mar. 😂", "Bore? Aaja Ludo khelte hain.", "So ja bhai, dimaag fresh hoga."],
-    "Gali": ["Gaali mat de, warna teri DP pe comment kar dunga. 🪞", "Muh dho kar aa, gandagi faila raha hai.", "Aukaat mein rah, yahan main king hoon. 👑"],
-    "Ladki": ["Ladkiyon ke chakkar mein mat pad, padhai par dhyan de. 📚", "Ladki patani hai toh rizz maang le. 😉"],
-    "Pyar": ["Pyar ek dhokha hai bhai, gym jaa.", "Sacha pyar sirf gaadi aur paise se hota hai. 💸"],
-    "Shaadi": ["Shaadi? Pehle kamane de bhai. 🤵", "Shaadi ka laddoo khana hai kya?"]
+    "gm": ["Good morning! ☕ Aaj ka din shandar ho.", "GM! Chai ready hai?", "Uth ja boss, duniya tera intezaar kar rahi hai. ☀️"],
+    "gn": ["Good night! Meethe sapne. 🌙", "GN, kal milte hain.", "So jao ab, dimaag fresh hoga. 😴"],
+    "kya h": ["Sab mast! Tu bata kya scene hai?", "Ekdum first class. Batao kya chal raha hai?", "Kuch nahi, bas group ki security kar raha hoon. 🛡️"],
+    "bhai": ["Haan bhai, bol.", "Kya hua? Koi dikkat?", "Bol jaldi, main busy hoon. 😎"],
+    "bro": ["Haan bro, batao.", "Kya chal raha hai?", "Bro code yaad rakhna! 🤜🤛"],
+    "lol": ["Hasi nahi ruk rahi 😂", "Lol mat bol, sharam kar thodi.", "Meme bhejna tha na."],
+    "bore": ["Bore? Jaakar gym kar. 😂", "Bore ho toh Ludo khelte hain.", "So ja bhai, dimaag fresh hoga."],
+    "gali": ["Gaali mat de, warna teri DP pe comment kar dunga. 🪞", "Muh dho kar aa, gandagi faila raha hai.", "Aukaat mein rah, yahan main king hoon. 👑"],
+    "ladki": ["Ladkiyon ke chakkar mein mat pad, padhai par dhyan de. 📚", "Ladki patani hai toh rizz maang le. 😉"],
+    "pyar": ["Pyar ek dhokha hai bhai, gym jaa.", "Sacha pyar sirf gaadi aur paise se hota hai. 💸"],
+    "shaadi": ["Shaadi? Pehle kamane de bhai. 🤵", "Shaadi ka laddoo khana hai kya?"]
 }
 
-# --- 50+ TRUTHS ---
 TRUTHS = [
     "Sabse Zyada Kiski Taarif Karta Hai?", "Last Time Kab Roya Tha Aur Kyun?", "Apni Ex Ko Wapas Paane Ka Plan Kya Hai?", 
     "Sabse Bada Jhoot Kya Bola Tha Ghar Walo Ko?", "Group Mein Sabse Zyada Kisse Jalta Hai?", "Nightfall Kitne Saal Ki Umar Se Shuru Hua Tha? 😂",
@@ -33,11 +32,9 @@ TRUTHS = [
     "Kya Kabhi Exam Mein Cheating Ki Hai? Kaise?", "Aaj Tak Ka Sabse Ajeeb Khana Kaunsa Khaya Hai?", "Apni Zindagi Ka Sabse Bada Risk Kya Liya?",
     "Kya Kabhi Kisi Par Bina Baat Kiye Pagal Ho Gaya Hai?", "Apni Family Mein Sabse Zyada Kisse Baat Karta Hai?", "Kya Kabhi Kisi Ko Screenshot Leake Ki Dhamki Di Hai?",
     "Apni Zindagi Ki Sabse Badi Jeet Kya Hai?", "Kaunsi Aadat Chhodni Hai Par Nahi Chhoot Rahi?", "Kya Kabhi Kisi Ko Apna Crush Reveal Kiya Hai? Kya Hua?",
-    "Aaj Tak Ki Sabse Gandi Cheez Kya Khai Hai?", "Apni Zindagi Ka Sabse Bada Kamzori Kya Hai?", "Kya Kabhi Kisi Ke Ghar Ka Samaan Chupke Se Toda Hai?",
-    "Kis Cheez Ke Liye Sabse Zyada Pareshan Hota Hai?", "Apni Zindagi Ka Sabse Bada Goal Kya Hai?", "Kya Kabhi Kisi Ko Sabke Saamne Beizzat Kiya Hai?"
+    "Aaj Tak Ki Sabse Gandi Cheez Kya Khai Hai?", "Apni Zindagi Ka Sabse Bada Kamzori Kya Hai?", "Kya Kabhi Kisi Ke Ghar Ka Samaan Chupke Se Toda Hai?"
 ]
 
-# --- 50+ DARES ---
 DARES = [
     "Apni Ex Ko 'Hi' Bhej Aur Screenshot Bhej.", "Group Ke Kisi 3 Ladko Ko Gaali De.", "Apni DP 10 Minute Ke Liye Kisi Cartoon Ki Laga.",
     "Apne Crush Ko Call Karke Bol 'Main Tumse Pyar Karta Hoon'.", "Apni Last Search History Ka Screenshot Bhej.", "Group Mein 'Main Ek Noob Hoon' 5 Baar Likh.",
@@ -65,7 +62,6 @@ DARES = [
     "Group Ke Kisi Member Ko Apni Purani Photo Bhej.", "Apni Zindagi Ka Sabse Bada Turning Point Group Ko Batao."
 ]
 
-# --- 50+ RIZZ ---
 RIZZ = [
     "Are You A Magician? Kyunki Jab Tu Dikhta Hai, Sab Gayab Ho Jate Hain.", 
     "Tera Naam Google Hai Kya? Kyunki Jo Main Dhoondh Raha Tha, Wo Tu Hi Hai.",
@@ -120,7 +116,6 @@ RIZZ = [
     "Tumse Milne Ke Baad, Mujhe Pyar Ka Matlab Samajh Aaya."
 ]
 
-# --- 50+ BRUTAL ROASTS ---
 ROASTS = [
     "Tum Wo Ho Jiske Karan Shampoo Par Likha Hota Hai 'Lather, Rinse, Repeat'.", 
     "Main Tumse Sehmat Hota, Par Phir Hum Dono Bewakoof Ho Jate.",
@@ -174,7 +169,6 @@ ROASTS = [
     "Tum Wo Ho Jiske Paas Kuch Bhi Nahi, Par Dikhawa 100%."
 ]
 
-# --- SHAYARI (Har Category Me 10+ Lines) ---
 SHAYARI = {
     "sad": [
         "Dil Ka Dard Kisi Ko Suna Nahi Sakte,\nHum Apne Aansu Kisi Ko Dikha Nahi Sakte,\nLog Kehte Hain Ki Hum Bahut Khush Hain,\nPar Andar Se Hum Muskurana Bhool Gaye Hain. 💔",
@@ -238,8 +232,31 @@ SHAYARI = {
     ]
 }
 
-# Trace Game Ke Words (50+)
 TRACE_WORDS = ["MUMBAI", "DELHI", "KOLKATA", "CHENNAI", "BANGALORE", "HYDERABAD", "PUNE", "JAIPUR", "LUCKNOW", "KANPUR", "NAGPUR", "INDORE", "THANE", "BHOPAL", "PATNA", "VADODARA", "GHAZIABAD", "AGRA", "NASHIK", "FARIDABAD", "CRICKET", "FOOTBALL", "HOCKEY", "TENNIS", "BADMINTON", "KABADDI", "WRESTLING", "BOXING", "GOLF", "CHESS", "SACHIN", "VIRAT", "DHONI", "ROHIT", "KOHLI", "SHARMA", "KAPIL", "DADA", "YUVRAJ", "HARDIK", "BUMRAH", "PANIPURI", "SAMOSA", "CHOWMEIN", "BIRYANI", "MOMOS", "DOSA", "IDLI", "VADA", "PAV", "BHAJIA", "JALEBI", "RASGULLA", "GULAB", "JAMUN", "KHEER", "HALWA", "LADDOO"]
+
+# Premium Hardcoded GIFs for Desi Commands
+DESI_GIFS = {
+    "chappal": "https://media.tenor.com/1Xq2X9qB7wAAAAAd/chappal-slap.gif",
+    "belan": "https://media.tenor.com/8sPZq3w2qYAAAAAd/belan-hit.gif",
+    "jhadu": "https://media.tenor.com/x6yT2w7x9AAAAAd/broom-hit.gif",
+    "tamacha": "https://media.tenor.com/5tPZq3w2qYAAAAAd/slap-anime.gif",
+    "lathi": "https://media.tenor.com/Y8xT2w7x9AAAAAd/police-stick.gif",
+    "chai": "https://media.tenor.com/4tPZq3w2qYAAAAAd/tea-splash.gif",
+    "kela": "https://media.tenor.com/Z8xT2w7x9AAAAAd/banana-slap.gif",
+    "mirchi": "https://media.tenor.com/3tPZq3w2qYAAAAAd/spicy.gif",
+    "dhoka": "https://media.tenor.com/W8xT2w7x9AAAAAd/backstab.gif",
+    "kamra": "https://media.tenor.com/2tPZq3w2qYAAAAAd/get-out.gif",
+    "bhai": "https://media.tenor.com/9n1WlM7Cq4AAAAAC/hug-anime.gif",
+    "bhen": "https://media.tenor.com/7C0z8sD2X3AAAAAC/anime-hug.gif",
+    "pyar": "https://media.tenor.com/Xq9J4vI8q4AAAAAC/anime-kiss.gif",
+    "gussa": "https://media.tenor.com/q8J4vI8q4AAAAAC/anime-slap.gif",
+    "dost": "https://media.tenor.com/5Vq9q7m2b3AAAAAC/cute-hug.gif",
+    "dushman": "https://media.tenor.com/1Vq9q7m2b3AAAAAC/anime-fight.gif",
+    "nacho": "https://media.tenor.com/s8Vq9q7m2b3AAAAAC/anime-dance.gif"
+}
+
+ROB_GIFS_SUCCESS = ["https://media.tenor.com/B8J4vI8q4AAAAAC/thief.gif", "https://media.tenor.com/3Vq9q7m2b3AAAAAC/money-loot.gif"]
+ROB_GIFS_FAIL = ["https://media.tenor.com/M8J4vI8q4AAAAAC/police.gif", "https://media.tenor.com/4Vq9q7m2b3AAAAAC/caught.gif"]
 
 BAN_GIFS = ["https://media.tenor.com/B8J4vI8q4AAAAAC/thor-hammer.gif"]
 MUTE_GIFS = ["https://media.tenor.com/M8J4vI8q4AAAAAC/shut-up.gif"]
